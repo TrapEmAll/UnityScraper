@@ -1,193 +1,220 @@
 import queue
 import threading
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import filedialog, messagebox, ttk
 
 from downloader import UnityScraper
 
 
 class App(tk.Tk):
     """
-    A simple Tkinter GUI for UnityScraper. Prompts for comma-separated
-    Title IDs, then runs downloads in a background thread. Uses a queue
-    to safely update the UI (listbox, progress bar, status).
+    Tkinter GUI for UnityScraper.
+
+    Fixes/improvements:
+      - Configurable output directory
+      - TitleID validation/normalization
+      - Keeps UI updates thread-safe via a queue + after()
     """
 
     def __init__(self):
         super().__init__()
-        self.title("XboxUnity Download Manager")
-        self.geometry("600x450")
 
-        # ====== Top Input Frame ======
-        input_frame = tk.Frame(self, pady=10)
-        input_frame.pack(fill=tk.X)
+        self.title("UnityScraper GUI")
+        self.geometry("760x520")
 
-        tk.Label(
-            input_frame,
-            text="Enter Xbox Title IDs (comma-separated):",
-            font=("Segoe UI", 10),
-        ).pack(anchor="w", padx=10)
+        self._queue = queue.Queue()
+        self._worker_thread = None
 
-        self.title_id_entry = tk.Entry(input_frame, width=60)
-        self.title_id_entry.pack(anchor="w", padx=10, pady=(4, 8))
+        # Defaults
+        self.output_dir = tk.StringVar(value="unityscrape")
+        self.rate_limit = tk.DoubleVar(value=0.35)
+        self.workers = tk.IntVar(value=UnityScraper.DEFAULT_MAX_WORKERS)
 
-        self.start_button = tk.Button(
-            input_frame, text="Start Download", command=self.start_download
-        )
-        self.start_button.pack(anchor="w", padx=10)
+        self._build_ui()
+        self._poll_queue()
 
-        # ====== Progress & Status Frame ======
-        status_frame = tk.Frame(self, pady=5)
-        status_frame.pack(fill=tk.X)
+    def _build_ui(self):
+        pad = {"padx": 10, "pady": 6}
 
-        tk.Label(status_frame, text="Status:", font=("Segoe UI", 10)).pack(
-            anchor="w", padx=10
-        )
-        self.status_label = tk.Label(
-            status_frame, text="Idle", anchor="w", font=("Segoe UI", 9, "italic")
-        )
-        self.status_label.pack(fill=tk.X, padx=10)
+        frm = ttk.Frame(self)
+        frm.pack(fill="both", expand=True)
 
-        tk.Label(status_frame, text="Overall Progress:", font=("Segoe UI", 10)).pack(
-            anchor="w", padx=10, pady=(6, 0)
-        )
-        self.overall_progress = ttk.Progressbar(
-            status_frame, length=400, mode="determinate"
-        )
-        self.overall_progress.pack(anchor="w", padx=10, pady=(2, 8))
+        # TitleIDs input
+        ttk.Label(frm, text="TitleIDs (comma separated):").grid(row=0, column=0, sticky="w", **pad)
+        self.entry_ids = ttk.Entry(frm, width=70)
+        self.entry_ids.grid(row=1, column=0, columnspan=3, sticky="we", **pad)
 
-        # ====== History Frame ======
-        hist_frame = tk.Frame(self, pady=10)
-        hist_frame.pack(fill=tk.BOTH, expand=True)
+        # Output directory selector
+        ttk.Label(frm, text="Output folder:").grid(row=2, column=0, sticky="w", **pad)
+        self.entry_out = ttk.Entry(frm, textvariable=self.output_dir, width=55)
+        self.entry_out.grid(row=3, column=0, columnspan=2, sticky="we", **pad)
+        ttk.Button(frm, text="Browse...", command=self._browse_out).grid(row=3, column=2, sticky="e", **pad)
 
-        tk.Label(hist_frame, text="Completed Title IDs:", font=("Segoe UI", 10)).pack(
-            anchor="w", padx=10
-        )
+        # Workers + Rate limit
+        ttk.Label(frm, text="Workers:").grid(row=4, column=0, sticky="w", **pad)
+        self.spin_workers = ttk.Spinbox(frm, from_=1, to=16, textvariable=self.workers, width=6)
+        self.spin_workers.grid(row=4, column=0, sticky="w", padx=80, pady=6)
 
-        self.history_listbox = tk.Listbox(hist_frame, width=60, height=10)
-        self.history_listbox.pack(fill=tk.BOTH, expand=True, padx=10, pady=(4, 0))
+        ttk.Label(frm, text="Min seconds/request:").grid(row=4, column=1, sticky="w", **pad)
+        self.entry_rate = ttk.Entry(frm, textvariable=self.rate_limit, width=8)
+        self.entry_rate.grid(row=4, column=1, sticky="w", padx=160, pady=6)
 
-        # ====== Internal Variables ======
-        self.queue = queue.Queue()  # for thread-safe UI updates
-        self.scraper = UnityScraper()
-        self.is_downloading = False
-        self.total_to_download = 0
-        self.completed_count = 0
+        # Buttons
+        self.btn_start = ttk.Button(frm, text="Start", command=self.start)
+        self.btn_start.grid(row=5, column=0, sticky="w", **pad)
 
-        # Start polling the queue
-        self.after(100, self.process_queue)
+        self.btn_stop = ttk.Button(frm, text="Stop (best-effort)", command=self.stop, state="disabled")
+        self.btn_stop.grid(row=5, column=1, sticky="w", **pad)
 
-        # Bind window close event
-        self.protocol("WM_DELETE_WINDOW", self.on_closing)
+        # Progress bar
+        self.progress = ttk.Progressbar(frm, orient="horizontal", mode="determinate", length=600)
+        self.progress.grid(row=6, column=0, columnspan=3, sticky="we", **pad)
 
-    def start_download(self):
-        """
-        Handler for the 'Start Download' button. Parses Title IDs,
-        initializes state, then spawns a background thread to run downloads.
-        """
-        if self.is_downloading:
-            return  # Already running
+        self.lbl_status = ttk.Label(frm, text="Idle.")
+        self.lbl_status.grid(row=7, column=0, columnspan=3, sticky="w", **pad)
 
-        txt = self.title_id_entry.get().strip()
-        if not txt:
-            messagebox.showwarning("No Title IDs", "Please enter at least one Title ID.")
+        # History / log
+        ttk.Label(frm, text="History:").grid(row=8, column=0, sticky="w", **pad)
+        self.listbox = tk.Listbox(frm, height=12)
+        self.listbox.grid(row=9, column=0, columnspan=3, sticky="nsew", **pad)
+
+        frm.grid_columnconfigure(0, weight=1)
+        frm.grid_columnconfigure(1, weight=1)
+        frm.grid_columnconfigure(2, weight=0)
+        frm.grid_rowconfigure(9, weight=1)
+
+    def _browse_out(self):
+        folder = filedialog.askdirectory(title="Select output folder")
+        if folder:
+            self.output_dir.set(folder)
+
+    def _parse_title_ids(self):
+        raw = self.entry_ids.get().strip()
+        parts = [p.strip() for p in raw.split(",") if p.strip()]
+
+        valid = []
+        invalid = []
+        for p in parts:
+            tid = UnityScraper.normalize_title_id(p)
+            if tid:
+                valid.append(tid)
+            else:
+                invalid.append(p)
+
+        return valid, invalid
+
+    def start(self):
+        if self._worker_thread and self._worker_thread.is_alive():
+            messagebox.showinfo("Busy", "A run is already in progress.")
             return
 
-        # Build list of Title IDs
-        title_ids = [tid.strip() for tid in txt.split(",") if tid.strip()]
+        title_ids, invalid = self._parse_title_ids()
         if not title_ids:
-            messagebox.showwarning("No Title IDs", "Please enter valid Title IDs.")
+            messagebox.showerror("No TitleIDs", "Please enter at least one valid 8-hex TitleID.")
             return
 
-        # Disable inputs
-        self.is_downloading = True
-        self.start_button.config(state=tk.DISABLED)
-        self.title_id_entry.config(state=tk.DISABLED)
-        self.history_listbox.delete(0, tk.END)
+        if invalid:
+            messagebox.showwarning("Invalid TitleIDs", "Skipping invalid TitleIDs:\n" + "\n".join(invalid))
 
-        # Initialize progress
-        self.total_to_download = len(title_ids)
-        self.completed_count = 0
-        self.overall_progress["maximum"] = self.total_to_download
-        self.overall_progress["value"] = 0
+        # UI state
+        self.btn_start.configure(state="disabled")
+        self.btn_stop.configure(state="normal")
+        self.progress.configure(maximum=len(title_ids), value=0)
+        self.listbox.insert(tk.END, f"Starting run: {len(title_ids)} TitleID(s)")
+        self.lbl_status.configure(text="Running...")
 
-        # Launch download in another thread
-        threading.Thread(
-            target=self.download_title_ids, args=(title_ids,), daemon=True
-        ).start()
+        out_dir = self.output_dir.get().strip() or "unityscrape"
 
-    def download_title_ids(self, title_ids):
+        # Validate numeric fields safely
+        try:
+            workers = int(self.workers.get())
+            rate = float(self.rate_limit.get())
+        except Exception:
+            messagebox.showerror("Invalid settings", "Workers must be an int and min seconds/request must be a number.")
+            self.btn_start.configure(state="normal")
+            self.btn_stop.configure(state="disabled")
+            return
+
+        self._stop_flag = threading.Event()
+        self._worker_thread = threading.Thread(
+            target=self._run_job,
+            args=(title_ids, out_dir, workers, rate),
+            daemon=True,
+        )
+        self._worker_thread.start()
+
+    def stop(self):
+        # Best-effort stop: we mark a flag; ongoing network calls will finish.
+        if hasattr(self, "_stop_flag"):
+            self._stop_flag.set()
+        self.listbox.insert(tk.END, "Stop requested (best-effort).")
+
+    def _run_job(self, title_ids, out_dir, workers, rate):
         """
-        Background thread: For each Title ID, call scraper.download_covers
-        and scraper.download_updates, then enqueue GUI updates.
+        Background worker thread. Reports UI updates via queue.
         """
+        scraper = UnityScraper(
+            base_dir=out_dir,
+            max_workers=max(1, workers),
+            min_request_interval=max(0.0, rate),
+        )
+
+        failed = []
         for idx, tid in enumerate(title_ids, start=1):
-            # Update status
-            self.queue.put(
-                (
-                    "status",
-                    f"({idx}/{len(title_ids)}) Processing Title ID: {tid}",
-                )
-            )
+            if self._stop_flag.is_set():
+                self._queue.put(("status", "Stopped by user."))
+                break
 
-            # Download covers + updates
-            ok_covers = self.scraper.download_covers(tid)
-            ok_updates = self.scraper.download_updates(tid)
-            success = ok_covers and ok_updates
+            self._queue.put(("status", f"Processing {tid} ({idx}/{len(title_ids)})..."))
+            self._queue.put(("log", f"=== {tid} ==="))
 
-            # Enqueue "history" update
-            self.queue.put(("history", (tid, success)))
+            ok1 = scraper.download_covers(tid)
+            ok2 = scraper.download_updates(tid)
 
-            # Enqueue progress bar increment
-            self.queue.put(("progress", 1))
+            if not (ok1 and ok2):
+                failed.append(tid)
+                self._queue.put(("log", f"{tid}: issues (covers={ok1}, updates={ok2})"))
+            else:
+                self._queue.put(("log", f"{tid}: OK"))
 
-        # All done
-        self.queue.put(("status", "All downloads complete."))
-        self.queue.put(("done", None))
+            self._queue.put(("progress", idx))
 
-    def process_queue(self):
+        if failed:
+            self._queue.put(("done", f"Finished with failures: {', '.join(failed)}"))
+        else:
+            self._queue.put(("done", "Finished successfully."))
+
+    def _poll_queue(self):
         """
-        Periodically called (via after) to process items in the queue and update the UI.
+        Main-thread polling loop to apply UI updates safely.
         """
         try:
             while True:
-                msg_type, data = self.queue.get_nowait()
-                if msg_type == "status":
-                    # Update status label
-                    self.status_label.config(text=data)
-                elif msg_type == "history":
-                    # data is (title_id, success)
-                    title_id, success = data
-                    display_text = f"{title_id}  →  {'OK' if success else 'FAILED'}"
-                    self.history_listbox.insert(tk.END, display_text)
-                elif msg_type == "progress":
-                    # data is an integer increment (usually 1)
-                    self.completed_count += data
-                    self.overall_progress["value"] = self.completed_count
-                elif msg_type == "done":
-                    # Re-enable inputs
-                    self.is_downloading = False
-                    self.start_button.config(state=tk.NORMAL)
-                    self.title_id_entry.config(state=tk.NORMAL)
+                msg = self._queue.get_nowait()
+                kind = msg[0]
+
+                if kind == "status":
+                    self.lbl_status.configure(text=msg[1])
+
+                elif kind == "log":
+                    self.listbox.insert(tk.END, msg[1])
+                    self.listbox.yview_moveto(1)
+
+                elif kind == "progress":
+                    self.progress.configure(value=msg[1])
+
+                elif kind == "done":
+                    self.lbl_status.configure(text=msg[1])
+                    self.listbox.insert(tk.END, msg[1])
+                    self.listbox.yview_moveto(1)
+                    self.btn_start.configure(state="normal")
+                    self.btn_stop.configure(state="disabled")
+
         except queue.Empty:
             pass
-        finally:
-            # Schedule next queue check
-            self.after(100, self.process_queue)
 
-    def on_closing(self):
-        """
-        Handler for window close. If a download is in progress, ask for confirmation.
-        """
-        if self.is_downloading:
-            if not messagebox.askokcancel(
-                "Downloads in progress",
-                "Downloads are still running. Do you really want to quit?",
-            ):
-                return
-        self.destroy()
+        self.after(100, self._poll_queue)
 
 
 if __name__ == "__main__":
-    app = App()
-    app.mainloop()
+    App().mainloop()

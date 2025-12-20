@@ -1,379 +1,509 @@
 import json
 import logging
+import os
 import re
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from time import sleep
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Iterable
 
 import requests
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from requests.exceptions import RequestException, Timeout
 
-# Configure module‐level logger. You can override level in main.py if desired.
+# ---------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 if not logger.handlers:
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        "%Y-%m-%d %H:%M:%S",
-    )
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
+    _handler = logging.StreamHandler()
+    _formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+    _handler.setFormatter(_formatter)
+    logger.addHandler(_handler)
 
 
 class UnityScraper:
     """
-    A class to fetch Xbox cover art and title updates given Title IDs
-    from xboxunity.net endpoints. It saves both JSON metadata and binary
-    files into a directory tree under `unityscrape/{title_id}/...`.
+    UnityScraper:
+      - Downloads cover art and Title Updates (TUs) from xboxunity.net endpoints
+      - Saves raw JSON responses for archival / debugging
+      - Supports parallel downloads (covers/updates) with thread-safe HTTP sessions
+      - Adds rate limiting and stronger retry behavior (including 429 Retry-After)
     """
 
-    # Base directory for all outputs
-    BASE_DIR = Path("unityscrape")
+    # IMPORTANT: User requested NO HTTPS support.
+    BASE_URL = "http://xboxunity.net"
 
-    # Endpoints for xboxunity.net (hardcode once, so changes are easy)
-    ENDPOINTS = {
-        "cover_info":   "http://xboxunity.net/Resources/Lib/CoverInfo.php",
-        "cover_fetch":  "http://xboxunity.net/Resources/Lib/Cover.php",
-        "update_info":  "http://xboxunity.net/Resources/Lib/TitleUpdateInfo.php",
-        "update_fetch": "http://xboxunity.net/Resources/Lib/TitleUpdate.php",
-    }
+    # -----------------------------------------------------------------
+    # Endpoints (Lib is correct for CoverInfo; keep fallbacks for resilience)
+    # -----------------------------------------------------------------
+    COVERS_INFO_ENDPOINT = "/Resources/Lib/CoverInfo.php"
+    COVER_IMAGE_ENDPOINT = "/Resources/Lib/Cover.php"
 
-    # How many times to retry a failed HTTP request
-    MAX_RETRIES = 3
-    # Exponential backoff factor (2^n seconds)
-    BACKOFF_FACTOR = 2
-    # Maximum backoff (in seconds)
-    MAX_BACKOFF = 30
-    # Number of threads for parallel downloads (per TitleID)
-    MAX_WORKERS = 4
+    UPDATES_INFO_ENDPOINT = "/Resources/Lib/TitleUpdateInfo.php"
+    UPDATE_DOWNLOAD_ENDPOINT = "/Resources/Lib/TitleUpdate.php"
 
-    def __init__(self, session: Optional[requests.Session] = None):
-        """
-        Initialize the UnityScraper.
+    # Fallback (legacy / alternative)
+    _ALT_COVERS_INFO_ENDPOINT = "/Resources/Covers/CoverInfo.php"
+    _ALT_COVER_IMAGE_ENDPOINT = "/Resources/Covers/Cover.php"
 
-        :param session: Optional requests.Session instance. If not provided,
-                        a new Session() is created, which enables connection pooling.
-        """
-        self.session = session or requests.Session()
+    _ALT_UPDATES_INFO_ENDPOINT = "/Resources/TitleUpdates/TitleUpdateInfo.php"
+    _ALT_UPDATE_DOWNLOAD_ENDPOINT = "/Resources/TitleUpdates/TitleUpdate.php"
 
-    def _make_request(
-        self, url: str, stream: bool = False, timeout: float = 10.0
-    ) -> Optional[requests.Response]:
-        """
-        Internal helper: Perform a GET request with retries and exponential backoff.
+    # Retry tuning
+    MAX_RETRIES = 5
+    BACKOFF_FACTOR = 2.0
+    MAX_BACKOFF = 45.0
 
-        :param url: Full URL to fetch.
-        :param stream: If True, allow streaming response (for large binaries).
-        :param timeout: Timeout in seconds (connect + read).
-        :return: requests.Response on success, or None if all retries failed.
-        """
-        for attempt in range(1, self.MAX_RETRIES + 1):
-            try:
-                resp = self.session.get(url, timeout=timeout, stream=stream)
-                resp.raise_for_status()
-                return resp
-            except (RequestException, Timeout) as exc:
-                wait = min(self.BACKOFF_FACTOR ** (attempt - 1), self.MAX_BACKOFF)
-                logger.warning(
-                    "Request to %s failed (attempt %d/%d): %s. Retrying in %d seconds...",
-                    url,
-                    attempt,
-                    self.MAX_RETRIES,
-                    exc,
-                    wait,
-                )
-                sleep(wait)
+    # Default threading
+    DEFAULT_MAX_WORKERS = 4
 
-        logger.error("Exceeded retries for URL: %s", url)
-        return None
+    # TitleID format: 8 hex chars
+    TITLEID_RE = re.compile(r"^[0-9A-F]{8}$")
 
-    def _save_json(self, title_id: str, payload: dict, json_type: str) -> None:
-        """
-        Save JSON payload to a file under BASE_DIR/{title_id}/{json_type}_data.json.
+    def __init__(
+        self,
+        base_dir: str = "unityscrape",
+        max_workers: int = DEFAULT_MAX_WORKERS,
+        min_request_interval: float = 0.35,
+        user_agent: str = "UnityScraper/1.3 (+https://github.com/Sthornberry9/UnityScraper)",
+        session: Optional[requests.Session] = None,
+    ):
+        self.base_dir = Path(base_dir)
+        self.max_workers = max(1, int(max_workers))
+        self.min_request_interval = max(0.0, float(min_request_interval))
+        self.user_agent = user_agent
 
-        :param title_id: The Title ID (e.g. '555308C5').
-        :param payload: A dict representing JSON data.
-        :param json_type: Either 'covers' or 'updates' (used in filename).
-        """
-        out_dir = self.BASE_DIR / title_id
-        out_dir.mkdir(parents=True, exist_ok=True)
+        # Thread-local sessions (safe for ThreadPoolExecutor)
+        self._tls = threading.local()
 
-        file_path = out_dir / f"{json_type}_data.json"
-        try:
-            with file_path.open("w", encoding="utf-8") as fp:
-                json.dump(payload, fp, indent=4)
-            logger.info(
-                "Saved %s JSON for title %s at %s",
-                json_type,
-                title_id,
-                file_path,
+        # Optional single session (only safe for single-thread usage)
+        self._single_session = session
+
+        # Global pacing across threads
+        self._rate_lock = threading.Lock()
+        self._last_request_ts = 0.0
+
+    # -----------------------------------------------------------------
+    # Session / Rate limiting helpers
+    # -----------------------------------------------------------------
+    def _get_session(self) -> requests.Session:
+        if self.max_workers == 1 and self._single_session is not None:
+            return self._single_session
+
+        sess = getattr(self._tls, "session", None)
+        if sess is None:
+            sess = requests.Session()
+            sess.headers.update(
+                {
+                    "User-Agent": self.user_agent,
+                    "Accept": "*/*",
+                    "Connection": "keep-alive",
+                }
             )
-        except Exception as exc:
-            logger.error(
-                "Failed to write %s JSON for title %s: %s", json_type, title_id, exc
-            )
+            self._tls.session = sess
+        return sess
 
-    def _extract_filename(self, content_disposition: Optional[str]) -> Optional[str]:
-        """
-        Parse the 'Content-Disposition' header to extract the filename.
+    def _pace_requests(self) -> None:
+        if self.min_request_interval <= 0:
+            return
+        with self._rate_lock:
+            now = time.time()
+            delta = now - self._last_request_ts
+            if delta < self.min_request_interval:
+                time.sleep(self.min_request_interval - delta)
+            self._last_request_ts = time.time()
 
-        :param content_disposition: e.g. 'attachment; filename="image.jpg"'
-        :return: 'image.jpg' or None if not found.
-        """
+    # -----------------------------------------------------------------
+    # Utility helpers
+    # -----------------------------------------------------------------
+    @staticmethod
+    def normalize_title_id(title_id: str) -> Optional[str]:
+        if not title_id:
+            return None
+        tid = title_id.strip().upper()
+        return tid if UnityScraper.TITLEID_RE.match(tid) else None
+
+    @staticmethod
+    def _atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(text, encoding=encoding)
+        os.replace(tmp, path)
+
+    @staticmethod
+    def _safe_filename(name: str, fallback: str = "file.bin") -> str:
+        if not name:
+            return fallback
+        name = name.replace("\\", "_").replace("/", "_")
+        name = re.sub(r'[<>:"|?*\x00-\x1F]', "_", name)
+        name = name.strip().rstrip(" .")
+        return name or fallback
+
+    @staticmethod
+    def _extract_filename(content_disposition: Optional[str]) -> Optional[str]:
         if not content_disposition:
             return None
+        m = re.search(r'filename\*?=(?:UTF-8\'\')?"?([^";]+)"?', content_disposition, re.IGNORECASE)
+        return m.group(1).strip() if m and m.group(1).strip() else None
 
-        matches = re.findall(r'filename="?(.+)"?', content_disposition)
-        if matches:
-            return matches[0].strip().strip('"')
+    # -----------------------------------------------------------------
+    # HTTP request wrapper
+    # -----------------------------------------------------------------
+    def _make_request(
+        self,
+        url: str,
+        *,
+        stream: bool = False,
+        timeout: float = 15.0,
+        allow_404: bool = False,
+    ) -> Optional[requests.Response]:
+        for attempt in range(1, self.MAX_RETRIES + 1):
+            try:
+                self._pace_requests()
+                sess = self._get_session()
+                resp = sess.get(url, timeout=timeout, stream=stream)
+
+                if resp.status_code == 429:
+                    retry_after = resp.headers.get("Retry-After")
+                    wait_s = None
+                    if retry_after:
+                        try:
+                            wait_s = float(retry_after)
+                        except ValueError:
+                            wait_s = None
+                    if wait_s is None:
+                        wait_s = min(self.MAX_BACKOFF, (self.BACKOFF_FACTOR ** attempt))
+                    logger.warning("429 rate limited. Sleeping %.2fs then retrying (%d/%d): %s",
+                                   wait_s, attempt, self.MAX_RETRIES, url)
+                    time.sleep(wait_s)
+                    continue
+
+                if 500 <= resp.status_code <= 599:
+                    wait_s = min(self.MAX_BACKOFF, (self.BACKOFF_FACTOR ** attempt))
+                    logger.warning("Server error %s. Sleeping %.2fs then retrying (%d/%d): %s",
+                                   resp.status_code, wait_s, attempt, self.MAX_RETRIES, url)
+                    time.sleep(wait_s)
+                    continue
+
+                if allow_404 and resp.status_code == 404:
+                    return resp
+
+                resp.raise_for_status()
+                return resp
+
+            except (Timeout, RequestException) as exc:
+                wait_s = min(self.MAX_BACKOFF, (self.BACKOFF_FACTOR ** attempt))
+                logger.warning("Request failed (%d/%d). Sleeping %.2fs. %s -> %s",
+                               attempt, self.MAX_RETRIES, wait_s, url, exc)
+                time.sleep(wait_s)
+
+        logger.error("All retries failed for URL: %s", url)
         return None
 
-    def download_covers(self, title_id: str) -> bool:
-        """
-        Fetch cover metadata JSON, save it, then download each cover image in parallel.
+    def _fetch_with_fallback(self, primary_url: str, fallback_url: str, *, stream: bool) -> Optional[requests.Response]:
+        resp = self._make_request(primary_url, stream=stream, allow_404=True)
+        if resp is None:
+            return None
+        if resp.status_code != 404:
+            return resp
+        logger.warning("Primary endpoint 404. Falling back.\n  Primary: %s\n  Fallback: %s", primary_url, fallback_url)
+        return self._make_request(fallback_url, stream=stream, allow_404=False)
 
-        :param title_id: Xbox Title ID, e.g. '555308C5'.
-        :return: True if all steps succeeded or no covers exist; False if any failures occurred.
-        """
-        logger.info("Fetching cover metadata for Title ID %s...", title_id)
-        info_url = f"{self.ENDPOINTS['cover_info']}?titleid={title_id}"
-        resp = self._make_request(info_url)
-
-        if not resp:
-            logger.error("Failed to fetch cover info for %s", title_id)
-            return False
-
-        # Parse JSON
+    # -----------------------------------------------------------------
+    # JSON storage
+    # -----------------------------------------------------------------
+    def _save_json(self, title_id: str, payload: Dict[str, Any], json_type: str) -> None:
+        out_path = self.base_dir / title_id / f"{json_type}_data.json"
         try:
-            covers_data = resp.json()
-        except ValueError as exc:
-            logger.error("Invalid JSON response for %s cover info: %s", title_id, exc)
+            pretty = json.dumps(payload, indent=4)
+            self._atomic_write_text(out_path, pretty, encoding="utf-8")
+            logger.info("Saved %s JSON for %s -> %s", json_type, title_id, out_path)
+        except Exception as exc:
+            logger.error("Failed to save %s JSON for %s: %s", json_type, title_id, exc)
+
+    # -----------------------------------------------------------------
+    # Covers
+    # -----------------------------------------------------------------
+    def download_covers(self, title_id: str) -> bool:
+        tid = self.normalize_title_id(title_id)
+        if not tid:
+            logger.error("Invalid TitleID: %s", title_id)
             return False
 
-        self._save_json(title_id, covers_data, "covers")
+        primary_info = f"{self.BASE_URL}{self.COVERS_INFO_ENDPOINT}?titleid={tid}"
+        fallback_info = f"{self.BASE_URL}{self._ALT_COVERS_INFO_ENDPOINT}?titleid={tid}"
 
-        covers_list = covers_data.get("Covers", [])
+        resp = self._fetch_with_fallback(primary_info, fallback_info, stream=False)
+        if not resp:
+            logger.error("Cover info request failed: %s", tid)
+            return False
+
+        try:
+            data = resp.json()
+        except Exception as exc:
+            logger.error("Failed to parse cover info JSON for %s: %s", tid, exc)
+            return False
+
+        self._save_json(tid, data, "covers")
+
+        covers_list = data.get("Covers", [])
         if not isinstance(covers_list, list) or not covers_list:
-            logger.info("No covers found for Title ID %s; skipping downloads.", title_id)
-            return True
+            logger.warning("No covers found for TitleID %s", tid)
+            return False
 
-        # Ensure output directory for covers exists
-        cover_dir = self.BASE_DIR / title_id / "covers"
+        cover_dir = self.base_dir / tid / "covers"
         cover_dir.mkdir(parents=True, exist_ok=True)
 
-        # Worker function for a single cover download
-        def _download_single_cover(cover: dict) -> bool:
-            cover_id = cover.get("CoverID")
+        def _download_single_cover(cover: Dict[str, Any]) -> Tuple[bool, str]:
+            cover_id = str(cover.get("CoverID", "")).strip()
             if not cover_id:
-                logger.warning(
-                    "Missing CoverID in one of the entries for Title %s; skipping.", title_id
-                )
-                return True  # skip but not fatal
+                return False, "UNKNOWN"
 
-            logger.info("Downloading cover %s for Title %s...", cover_id, title_id)
-            image_url = f"{self.ENDPOINTS['cover_fetch']}?size=large&cid={cover_id}"
-            img_resp = self._make_request(image_url, stream=True)
+            primary_img = f"{self.BASE_URL}{self.COVER_IMAGE_ENDPOINT}?size=large&cid={cover_id}"
+            fallback_img = f"{self.BASE_URL}{self._ALT_COVER_IMAGE_ENDPOINT}?size=large&cid={cover_id}"
+
+            img_resp = self._fetch_with_fallback(primary_img, fallback_img, stream=True)
             if not img_resp:
-                logger.error(
-                    "Failed to download cover %s for Title %s", cover_id, title_id
-                )
-                return False
+                return False, cover_id
 
-            # Try extracting filename from headers
-            cd_header = img_resp.headers.get("content-disposition")
-            filename = self._extract_filename(cd_header)
+            cd = img_resp.headers.get("content-disposition")
+            filename = self._extract_filename(cd)
+
             if not filename:
-                # Fallback: use MIME type to choose extension
-                content_type = img_resp.headers.get("Content-Type", "")
-                ext = content_type.split("/")[-1] if "/" in content_type else "jpg"
+                ctype = (img_resp.headers.get("Content-Type") or "").lower()
+                ext = "jpg"
+                if "png" in ctype:
+                    ext = "png"
+                elif "jpeg" in ctype or "jpg" in ctype:
+                    ext = "jpg"
                 filename = f"{cover_id}.{ext}"
 
+            filename = self._safe_filename(filename, fallback=f"{cover_id}.jpg")
             out_file = cover_dir / filename
+
             try:
                 with out_file.open("wb") as fp:
-                    for chunk in img_resp.iter_content(chunk_size=8192):
-                        fp.write(chunk)
-                logger.info(
-                    "Saved cover %s for Title %s to %s", cover_id, title_id, out_file
-                )
-                return True
-            except Exception as write_exc:
-                logger.error(
-                    "Error writing cover %s for Title %s: %s", cover_id, title_id, write_exc
-                )
-                return False
+                    for chunk in img_resp.iter_content(chunk_size=1024 * 64):
+                        if chunk:
+                            fp.write(chunk)
+                return True, cover_id
+            except Exception as exc:
+                logger.error("Failed writing cover %s for %s: %s", cover_id, tid, exc)
+                return False, cover_id
 
-        # Download covers in parallel
-        success = True
-        with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as executor:
-            future_to_cover = {
-                executor.submit(_download_single_cover, cover): cover.get("CoverID")
-                for cover in covers_list
-            }
-            for future in as_completed(future_to_cover):
-                cover_id = future_to_cover[future]
-                try:
-                    result = future.result()
-                    if not result:
-                        success = False
-                except Exception as exc:
-                    logger.error(
-                        "Unexpected exception downloading cover %s for %s: %s",
-                        cover_id,
-                        title_id,
-                        exc,
-                    )
-                    success = False
+        ok_any = False
+        all_ok = True
 
-        return success
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = {executor.submit(_download_single_cover, c): c for c in covers_list}
+            for fut in as_completed(futures):
+                success, cover_id = fut.result()
+                ok_any = ok_any or success
+                if not success:
+                    all_ok = False
+                    logger.warning("Cover download failed for TitleID %s (CoverID %s)", tid, cover_id)
+
+        return ok_any and all_ok or ok_any
+
+    # -----------------------------------------------------------------
+    # Updates: schema-tolerant extraction
+    # -----------------------------------------------------------------
+    @staticmethod
+    def _iter_dicts(obj: Any) -> Iterable[Dict[str, Any]]:
+        """
+        Walks through nested structures and yields dictionaries.
+        Used to robustly find update entries even when schema differs.
+        """
+        if isinstance(obj, dict):
+            yield obj
+            for v in obj.values():
+                yield from UnityScraper._iter_dicts(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                yield from UnityScraper._iter_dicts(item)
+
+    @staticmethod
+    def _extract_update_tasks(data: Dict[str, Any]) -> List[Tuple[str, Dict[str, Any]]]:
+        """
+        Returns list of (media_id, update_entry_dict)
+
+        Handles multiple possible schemas, including XboxUnity's common typo/variant:
+          - MediaIDS (capital S)  ✅ IMPORTANT
+          - MediaIDs
+          - MediaID(s) nested
+          - Updates / TitleUpdates at top-level
+        """
+        tasks: List[Tuple[str, Dict[str, Any]]] = []
+
+        def add_update(media_id: str, upd: Dict[str, Any]) -> None:
+            mid = str(media_id).strip()
+            if not mid:
+                return
+            if isinstance(upd, dict) and upd:
+                tasks.append((mid, upd))
+
+        # ---- NEW: accept MediaIDS as well as MediaIDs
+        media = (
+            data.get("MediaIDs")
+            or data.get("MediaIDS")   # ✅ your JSON uses this
+            or data.get("mediaids")
+            or data.get("mediaIDS")
+        )
+
+        # 1) Media list
+        if isinstance(media, list):
+            for m in media:
+                if not isinstance(m, dict):
+                    continue
+                mid = m.get("MediaID") or m.get("MediaId") or m.get("mediaid")
+                updates = m.get("Updates") or m.get("TitleUpdates") or m.get("updates")
+                if mid and isinstance(updates, list):
+                    for upd in updates:
+                        if isinstance(upd, dict):
+                            add_update(str(mid), upd)
+
+        # 2) Media dict (rare)
+        if not tasks and isinstance(media, dict):
+            mid = media.get("MediaID") or media.get("MediaId") or media.get("mediaid")
+            updates = media.get("Updates") or media.get("TitleUpdates") or media.get("updates")
+            if mid and isinstance(updates, list):
+                for upd in updates:
+                    if isinstance(upd, dict):
+                        add_update(str(mid), upd)
+
+        # 3) Top-level Updates / TitleUpdates list
+        if not tasks:
+            top_updates = data.get("Updates") or data.get("TitleUpdates") or data.get("updates")
+            if isinstance(top_updates, list):
+                for upd in top_updates:
+                    if not isinstance(upd, dict):
+                        continue
+                    mid = upd.get("MediaID") or upd.get("MediaId") or upd.get("mediaid")
+                    if mid:
+                        add_update(str(mid), upd)
+
+        # 4) Deep scan fallback
+        if not tasks:
+            for d in UnityScraper._iter_dicts(data):
+                tuid = d.get("TitleUpdateID") or d.get("TitleUpdateId") or d.get("tuid")
+                if not tuid:
+                    continue
+                mid = d.get("MediaID") or d.get("MediaId") or d.get("mediaid")
+                if mid:
+                    add_update(str(mid), d)
+
+        # Deduplicate
+        seen = set()
+        deduped: List[Tuple[str, Dict[str, Any]]] = []
+        for mid, upd in tasks:
+            tuid = str(upd.get("TitleUpdateID") or upd.get("TitleUpdateId") or upd.get("tuid") or "").strip()
+            key = (mid, tuid)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append((mid, upd))
+
+        return deduped
+
 
     def download_updates(self, title_id: str) -> bool:
-        """
-        Fetch update metadata JSON, save it, then download each Title Update binary in parallel.
+        tid = self.normalize_title_id(title_id)
+        if not tid:
+            logger.error("Invalid TitleID: %s", title_id)
+            return False
 
-        :param title_id: Xbox Title ID, e.g. '555308C5'.
-        :return: True if all steps succeeded or no updates exist; False if any failures occurred.
-        """
-        logger.info("Fetching update metadata for Title ID %s...", title_id)
-        info_url = f"{self.ENDPOINTS['update_info']}?titleid={title_id}"
-        resp = self._make_request(info_url)
+        primary_info = f"{self.BASE_URL}{self.UPDATES_INFO_ENDPOINT}?titleid={tid}"
+        fallback_info = f"{self.BASE_URL}{self._ALT_UPDATES_INFO_ENDPOINT}?titleid={tid}"
 
+        resp = self._fetch_with_fallback(primary_info, fallback_info, stream=False)
         if not resp:
-            logger.error("Failed to fetch update info for %s", title_id)
+            logger.error("Update info request failed: %s", tid)
             return False
 
-        # Parse JSON
         try:
-            updates_data = resp.json()
-        except ValueError as exc:
-            logger.error("Invalid JSON response for %s update info: %s", title_id, exc)
+            data = resp.json()
+        except Exception as exc:
+            logger.error("Failed to parse update info JSON for %s: %s", tid, exc)
             return False
 
-        self._save_json(title_id, updates_data, "updates")
+        self._save_json(tid, data, "updates")
 
-        media_list = updates_data.get("MediaIDS", [])
-        if not isinstance(media_list, list) or not media_list:
-            logger.info("No Title Update metadata under MediaIDS for Title %s; skipping.", title_id)
-            return True
+        tasks = self._extract_update_tasks(data)
+        if not tasks:
+            logger.warning("No update entries found for TitleID %s (schema mismatch or truly none).", tid)
+            return False
 
-        # Worker function for a single update download
-        def _download_single_update(media: dict, update_entry: dict) -> bool:
-            media_id = media.get("MediaID")
-            tuid = update_entry.get("TitleUpdateID")
-            version = update_entry.get("Version")
+        def _download_single_update(media_id: str, update_entry: Dict[str, Any]) -> Tuple[bool, str]:
+            tuid = str(update_entry.get("TitleUpdateID") or update_entry.get("TitleUpdateId") or update_entry.get("tuid") or "").strip()
+            version = str(update_entry.get("Version") or update_entry.get("version") or "").strip() or "unknown"
+            if not tuid:
+                return False, "UNKNOWN"
 
-            if not media_id or not tuid or version is None:
-                logger.warning(
-                    "Invalid media/update entry under Title %s: %s / %s. Skipping.",
-                    title_id,
-                    media,
-                    update_entry,
-                )
-                return True  # skip but not fatal
+            primary_upd = f"{self.BASE_URL}{self.UPDATE_DOWNLOAD_ENDPOINT}?tuid={tuid}"
+            fallback_upd = f"{self.BASE_URL}{self._ALT_UPDATE_DOWNLOAD_ENDPOINT}?tuid={tuid}"
 
-            logger.info(
-                "Downloading update %s (version %s) for Media %s under Title %s...",
-                tuid,
-                version,
-                media_id,
-                title_id,
-            )
-            update_url = f"{self.ENDPOINTS['update_fetch']}?tuid={tuid}"
-            upd_resp = self._make_request(update_url, stream=True)
+            upd_resp = self._fetch_with_fallback(primary_upd, fallback_upd, stream=True)
             if not upd_resp:
-                logger.error(
-                    "Failed to download update %s (Title %s)", tuid, title_id
-                )
-                return False
+                return False, tuid
 
-            # Determine filename
-            cd_header = upd_resp.headers.get("content-disposition")
-            filename = self._extract_filename(cd_header) or f"update_{tuid}.bin"
+            cd = upd_resp.headers.get("content-disposition")
+            filename = self._extract_filename(cd) or f"update_{tuid}.bin"
+            filename = self._safe_filename(filename, fallback=f"update_{tuid}.bin")
 
-            out_dir = self.BASE_DIR / title_id / str(media_id) / f"updateversion{version}"
+            # Keep legacy layout for drop-in compatibility
+            out_dir = self.base_dir / tid / str(media_id) / f"updateversion{version}"
             out_dir.mkdir(parents=True, exist_ok=True)
             out_file = out_dir / filename
 
             try:
                 with out_file.open("wb") as fp:
-                    for chunk in upd_resp.iter_content(chunk_size=8192):
-                        fp.write(chunk)
-                logger.info(
-                    "Saved update %s (Title %s) to %s", tuid, title_id, out_file
-                )
-                return True
-            except Exception as write_exc:
-                logger.error(
-                    "Error writing update %s (Title %s): %s", tuid, title_id, write_exc
-                )
-                return False
+                    for chunk in upd_resp.iter_content(chunk_size=1024 * 64):
+                        if chunk:
+                            fp.write(chunk)
+                return True, tuid
+            except Exception as exc:
+                logger.error("Failed writing update %s for %s: %s", tuid, tid, exc)
+                return False, tuid
 
-        # Collect all (media, update_entry) pairs
-        tasks = []
-        for media in media_list:
-            updates_sublist = media.get("Updates", [])
-            if not isinstance(updates_sublist, list):
-                continue
-            for upd in updates_sublist:
-                tasks.append((media, upd))
+        ok_any = False
+        all_ok = True
 
-        if not tasks:
-            logger.info("No valid Updates entries for Title %s; skipping downloads.", title_id)
-            return True
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = {executor.submit(_download_single_update, mid, upd): (mid, upd) for (mid, upd) in tasks}
+            for fut in as_completed(futures):
+                success, tuid = fut.result()
+                ok_any = ok_any or success
+                if not success:
+                    all_ok = False
+                    logger.warning("Update download failed for TitleID %s (TU %s)", tid, tuid)
 
-        # Download all updates in parallel
-        success = True
-        with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as executor:
-            future_to_ident = {}
-            for media, upd in tasks:
-                future = executor.submit(_download_single_update, media, upd)
-                # We store (mediaID, tuid) just for logging on exception
-                future_to_ident[future] = (
-                    media.get("MediaID"),
-                    upd.get("TitleUpdateID"),
-                )
+        return ok_any and all_ok or ok_any
 
-            for future in as_completed(future_to_ident):
-                media_id, tuid = future_to_ident[future]
-                try:
-                    result = future.result()
-                    if not result:
-                        success = False
-                except Exception as exc:
-                    logger.error(
-                        "Unexpected exception downloading update %s (Media %s) for Title %s: %s",
-                        tuid,
-                        media_id,
-                        title_id,
-                        exc,
-                    )
-                    success = False
-
-        return success
-
+    # -----------------------------------------------------------------
+    # Multi-title orchestration
+    # -----------------------------------------------------------------
     def scrape_multiple(self, title_ids: List[str]) -> List[str]:
-        """
-        Given a list of Title IDs, download covers & updates for each in sequence.
+        failed: List[str] = []
 
-        :param title_ids: e.g. ['555308C5', '00000155', ...]
-        :return: A list of Title IDs that failed (empty if all succeeded).
-        """
-        failed = []
-        for idx, tid in enumerate(title_ids, start=1):
-            tid = tid.strip()
-            if not tid:
-                continue
-            logger.info("=== (%d/%d) Processing Title ID %s ===", idx, len(title_ids), tid)
-            ok1 = self.download_covers(tid)
-            ok2 = self.download_updates(tid)
-            if not (ok1 and ok2):
+        normalized: List[str] = []
+        for raw in title_ids:
+            tid = self.normalize_title_id(raw)
+            if tid:
+                normalized.append(tid)
+            else:
+                logger.warning("Skipping invalid TitleID: %s", raw)
+
+        for idx, tid in enumerate(normalized, start=1):
+            logger.info("=== (%d/%d) Processing TitleID %s ===", idx, len(normalized), tid)
+
+            ok_covers = self.download_covers(tid)
+            ok_updates = self.download_updates(tid)
+
+            if not (ok_covers and ok_updates):
                 failed.append(tid)
-            logger.info(
-                "=== Finished Title ID %s (covers: %s, updates: %s) ===",
-                tid,
-                ok1,
-                ok2,
-            )
+
+            logger.info("=== Finished %s (covers: %s, updates: %s) ===", tid, ok_covers, ok_updates)
+
         return failed
