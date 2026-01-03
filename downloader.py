@@ -4,6 +4,7 @@ import os
 import re
 import threading
 import time
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Iterable
@@ -14,14 +15,17 @@ from requests.exceptions import RequestException, Timeout
 # ---------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------
+# IMPORTANT: ensure handler goes to stderr
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 if not logger.handlers:
-    _handler = logging.StreamHandler()
+    _handler = logging.StreamHandler(sys.stderr)
     _formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
     _handler.setFormatter(_formatter)
     logger.addHandler(_handler)
 
+# Prevent duplicate logs if root logger has handlers too
+logger.propagate = False
 
 class UnityScraper:
     """
@@ -226,6 +230,81 @@ class UnityScraper:
     # -----------------------------------------------------------------
     # Covers
     # -----------------------------------------------------------------
+    
+        # -----------------------------------------------------------------
+    # Covers: list + download single
+    # -----------------------------------------------------------------
+    def get_covers_info(self, title_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch cover info JSON for a TitleID (no downloads)."""
+        tid = self.normalize_title_id(title_id)
+        if not tid:
+            logger.error("Invalid TitleID: %s", title_id)
+            return None
+
+        primary_info = f"{self.BASE_URL}{self.COVERS_INFO_ENDPOINT}?titleid={tid}"
+        fallback_info = f"{self.BASE_URL}{self._ALT_COVERS_INFO_ENDPOINT}?titleid={tid}"
+
+        resp = self._fetch_with_fallback(primary_info, fallback_info, stream=False)
+        if not resp:
+            logger.error("Cover info request failed: %s", tid)
+            return None
+
+        try:
+            data = resp.json()
+        except Exception as exc:
+            logger.error("Failed to parse cover info JSON for %s: %s", tid, exc)
+            return None
+
+        self._save_json(tid, data, "covers")
+        return data
+
+    def download_cover_by_id(self, title_id: str, cover_id: str, out_dir: Optional[str] = None) -> Optional[str]:
+        """Download a single cover image by CoverID. Returns the output filepath."""
+        tid = self.normalize_title_id(title_id)
+        if not tid:
+            logger.error("Invalid TitleID: %s", title_id)
+            return None
+
+        cid = str(cover_id).strip()
+        if not cid:
+            logger.error("Invalid CoverID: %s", cover_id)
+            return None
+
+        primary_img = f"{self.BASE_URL}{self.COVER_IMAGE_ENDPOINT}?size=large&cid={cid}"
+        fallback_img = f"{self.BASE_URL}{self._ALT_COVER_IMAGE_ENDPOINT}?size=large&cid={cid}"
+
+        img_resp = self._fetch_with_fallback(primary_img, fallback_img, stream=True)
+        if not img_resp:
+            logger.error("Cover download failed: title=%s cover=%s", tid, cid)
+            return None
+
+        cd = img_resp.headers.get("content-disposition")
+        filename = self._extract_filename(cd)
+        if not filename:
+            ctype = (img_resp.headers.get("Content-Type") or "").lower()
+            ext = "jpg"
+            if "png" in ctype:
+                ext = "png"
+            elif "jpeg" in ctype or "jpg" in ctype:
+                ext = "jpg"
+            filename = f"{cid}.{ext}"
+
+        filename = self._safe_filename(filename, fallback=f"{cid}.jpg")
+
+        base = Path(out_dir) if out_dir else (self.base_dir / tid / "covers")
+        base.mkdir(parents=True, exist_ok=True)
+        out_file = base / filename
+
+        try:
+            with out_file.open("wb") as fp:
+                for chunk in img_resp.iter_content(chunk_size=1024 * 64):
+                    if chunk:
+                        fp.write(chunk)
+            return str(out_file)
+        except Exception as exc:
+            logger.error("Failed writing cover %s for %s: %s", cid, tid, exc)
+            return None
+    
     def download_covers(self, title_id: str) -> bool:
         tid = self.normalize_title_id(title_id)
         if not tid:
@@ -406,6 +485,70 @@ class UnityScraper:
             deduped.append((mid, upd))
 
         return deduped
+
+
+        # -----------------------------------------------------------------
+    # Updates: list + download single
+    # -----------------------------------------------------------------
+    def get_updates_info(self, title_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch title update info JSON for a TitleID (no downloads)."""
+        tid = self.normalize_title_id(title_id)
+        if not tid:
+            logger.error("Invalid TitleID: %s", title_id)
+            return None
+
+        primary_info = f"{self.BASE_URL}{self.UPDATES_INFO_ENDPOINT}?titleid={tid}"
+        fallback_info = f"{self.BASE_URL}{self._ALT_UPDATES_INFO_ENDPOINT}?titleid={tid}"
+
+        resp = self._fetch_with_fallback(primary_info, fallback_info, stream=False)
+        if not resp:
+            logger.error("Update info request failed: %s", tid)
+            return None
+
+        try:
+            data = resp.json()
+        except Exception as exc:
+            logger.error("Failed to parse update info JSON for %s: %s", tid, exc)
+            return None
+
+        self._save_json(tid, data, "updates")
+        return data
+
+    def download_update_by_id(self, title_update_id: str, out_dir: str) -> Optional[str]:
+        """
+        Download a single Title Update by TU ID (tuid=...).
+        Returns the output filepath.
+        """
+        tuid = str(title_update_id).strip()
+        if not tuid:
+            logger.error("Invalid TitleUpdateID: %s", title_update_id)
+            return None
+
+        primary_upd = f"{self.BASE_URL}{self.UPDATE_DOWNLOAD_ENDPOINT}?tuid={tuid}"
+        fallback_upd = f"{self.BASE_URL}{self._ALT_UPDATE_DOWNLOAD_ENDPOINT}?tuid={tuid}"
+
+        upd_resp = self._fetch_with_fallback(primary_upd, fallback_upd, stream=True)
+        if not upd_resp:
+            logger.error("Update download failed: tuid=%s", tuid)
+            return None
+
+        cd = upd_resp.headers.get("content-disposition")
+        filename = self._extract_filename(cd) or f"update_{tuid}.bin"
+        filename = self._safe_filename(filename, fallback=f"update_{tuid}.bin")
+
+        out_path = Path(out_dir)
+        out_path.mkdir(parents=True, exist_ok=True)
+        out_file = out_path / filename
+
+        try:
+            with out_file.open("wb") as fp:
+                for chunk in upd_resp.iter_content(chunk_size=1024 * 64):
+                    if chunk:
+                        fp.write(chunk)
+            return str(out_file)
+        except Exception as exc:
+            logger.error("Failed writing update %s: %s", tuid, exc)
+            return None
 
 
     def download_updates(self, title_id: str) -> bool:
