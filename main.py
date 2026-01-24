@@ -229,15 +229,15 @@ class UnityScraper:
     
     def get_download_size_estimate(self, titleid: str) -> Dict[str, int]:
         """Estimate total download size before downloading"""
-        titleid = self.validate_titleid(titleid)
-        if not titleid:
+        validated_titleid = self.validate_titleid(titleid)
+        if not validated_titleid:
             return {'covers_bytes': 0, 'updates_bytes': 0, 'total_bytes': 0}
         
         total_covers = 0
         total_updates = 0
         
         # Estimate cover sizes
-        covers_data = self.fetch_json_data(self.config.api_endpoints['covers'], titleid)
+        covers_data = self.fetch_json_data(self.config.api_endpoints['covers'], validated_titleid)
         if covers_data:
             covers_list = covers_data.get('Covers', [])
             if isinstance(covers_list, list):
@@ -251,7 +251,7 @@ class UnityScraper:
                                 total_covers += size
         
         # Estimate update sizes
-        updates_data = self.fetch_json_data(self.config.api_endpoints['updates'], titleid)
+        updates_data = self.fetch_json_data(self.config.api_endpoints['updates'], validated_titleid)
         if updates_data:
             media_list = updates_data.get('MediaIDS', updates_data.get('MediaIDs', []))
             if isinstance(media_list, list):
@@ -324,33 +324,33 @@ class UnityScraper:
     
     def collect_metadata(self, titleid: str) -> bool:
         """Collect and store metadata for a TitleID without downloading files"""
-        titleid = self.validate_titleid(titleid)
-        if not titleid:
+        validated_titleid = self.validate_titleid(titleid)
+        if not validated_titleid:
             return False
         
         logger.info(f"{'='*60}")
-        logger.info(f"Collecting metadata for TitleID: {titleid}")
+        logger.info(f"Collecting metadata for TitleID: {validated_titleid}")
         logger.info(f"{'='*60}")
         
         # Check if refresh is needed (feature 6)
         if self.config.refresh_interval_days > 0:
-            titleid_info = self.db.get_titleid_info(titleid)
+            titleid_info = self.db.get_titleid_info(validated_titleid)
             if titleid_info and titleid_info.get('last_scraped'):
                 last_scraped = datetime.fromisoformat(titleid_info['last_scraped'])
                 days_since = (datetime.now() - last_scraped).days
                 if days_since < self.config.refresh_interval_days:
-                    logger.info(f"Skipping refresh for {titleid} (last scraped {days_since} days ago)")
+                    logger.info(f"Skipping refresh for {validated_titleid} (last scraped {days_since} days ago)")
                     return True
         
         # Add TitleID to database
-        self.db.add_titleid(titleid)
+        self.db.add_titleid(validated_titleid)
         
         # Batch lists for concurrent inserts (feature 15)
         covers_batch = []
         updates_batch = []
         
         # Fetch and store covers metadata only
-        covers_data = self.fetch_json_data(self.config.api_endpoints['covers'], titleid)
+        covers_data = self.fetch_json_data(self.config.api_endpoints['covers'], validated_titleid)
         if covers_data:
             covers_list = covers_data.get('Covers', [])
             if isinstance(covers_list, list):
@@ -361,7 +361,7 @@ class UnityScraper:
                             # Store cover metadata WITHOUT downloading
                             cover_url = f"{self.config.base_url}/Resources/Lib/Cover.php?size=large&cid={cover_id}"
                             covers_batch.append({
-                                'titleid': titleid,
+                                'titleid': validated_titleid,
                                 'cover_url': cover_url,
                                 'cover_type': cover.get('CoverType', 'unknown'),
                                 'status': 'pending',
@@ -374,7 +374,7 @@ class UnityScraper:
             self.db.batch_insert_covers(covers_batch)
         
         # Fetch and store updates metadata only
-        updates_data = self.fetch_json_data(self.config.api_endpoints['updates'], titleid)
+        updates_data = self.fetch_json_data(self.config.api_endpoints['updates'], validated_titleid)
         if updates_data:
             media_list = updates_data.get('MediaIDS', updates_data.get('MediaIDs', []))
             if isinstance(media_list, list):
@@ -393,7 +393,7 @@ class UnityScraper:
                                         # Store update metadata WITHOUT downloading
                                         update_url = f"{self.config.base_url}/Resources/Lib/TitleUpdate.php?tuid={tuid}"
                                         updates_batch.append({
-                                            'titleid': titleid,
+                                            'titleid': validated_titleid,
                                             'media_id': str(media_id),
                                             'version': str(version),
                                             'download_url': update_url,
@@ -407,37 +407,37 @@ class UnityScraper:
             self.db.batch_insert_updates(updates_batch)
         
         # Update database with scrape info
-        self.db.update_scrape_info(titleid)
+        self.db.update_scrape_info(validated_titleid)
         
         logger.info(f"[OK] Collected metadata for TitleID: {titleid}")
         return True
     
     def process_titleid(self, titleid: str) -> bool:
         """Process a single TitleID - download covers and updates"""
-        titleid = self.validate_titleid(titleid)
-        if not titleid:
+        validated_titleid = self.validate_titleid(titleid)
+        if not validated_titleid:
             return False
         
         logger.info(f"{'='*60}")
-        logger.info(f"Downloading content for TitleID: {titleid}")
+        logger.info(f"Downloading content for TitleID: {validated_titleid}")
         logger.info(f"{'='*60}")
         
-        output_dir = self.config.output_dir / titleid
+        output_dir = self.config.output_dir / validated_titleid
         output_dir.mkdir(parents=True, exist_ok=True)
         
         # Fetch and download covers data
-        covers_data = self.fetch_json_data(self.config.api_endpoints['covers'], titleid)
+        covers_data = self.fetch_json_data(self.config.api_endpoints['covers'], validated_titleid)
         if covers_data:
             with open(output_dir / 'covers_data.json', 'w') as f:
                 json.dump(covers_data, f, indent=2)
-            self._download_covers(titleid, covers_data, output_dir)
+            self._download_covers(validated_titleid, covers_data, output_dir)
         
         # Fetch and download updates data
-        updates_data = self.fetch_json_data(self.config.api_endpoints['updates'], titleid)
+        updates_data = self.fetch_json_data(self.config.api_endpoints['updates'], validated_titleid)
         if updates_data:
             with open(output_dir / 'updates_data.json', 'w') as f:
                 json.dump(updates_data, f, indent=2)
-            self._download_updates(titleid, updates_data, output_dir)
+            self._download_updates(validated_titleid, updates_data, output_dir)
         
         logger.info(f"[OK] Completed downloads for TitleID: {titleid}")
         return True
@@ -618,7 +618,7 @@ class UnityScraper:
         
         logger.info("Retry operation completed")
     
-    def export_database(self, format: str = 'json', output_file: str = None):
+    def export_database(self, format: str = 'json', output_file: Optional[str] = None):
         """Export database to JSON or CSV (feature 4)"""
         if not output_file:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

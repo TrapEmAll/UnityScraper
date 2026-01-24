@@ -129,7 +129,7 @@ if __name__ == '__main__':
     checker = VersionChecker()
     has_update, info = checker.check_for_updates()
     
-    if has_update:
+    if has_update and info is not None:
         print(VersionChecker.format_update_message(info))
     else:
         print(f"Running latest version: {checker.get_current_version()}")

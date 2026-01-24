@@ -77,7 +77,7 @@ class DownloadQueue:
             return True
         return False
     
-    def mark_failed(self, item_id: str, error: str = None) -> bool:
+    def mark_failed(self, item_id: str, error: Optional[str] = None) -> bool:
         """Mark item as failed"""
         item = self._find_item(item_id)
         if item:

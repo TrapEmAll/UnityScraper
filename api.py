@@ -6,10 +6,13 @@ Expose scraper functionality via HTTP endpoints
 import logging
 import json
 import threading
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, TYPE_CHECKING
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from pathlib import Path
+
+if TYPE_CHECKING:
+    from main import UnityScraper
 
 logger = logging.getLogger(__name__)
 
@@ -17,11 +20,11 @@ logger = logging.getLogger(__name__)
 class UnityScraperAPI:
     """REST API wrapper for UnityScraper"""
     
-    def __init__(self, scraper=None, port: int = 8000, host: str = "127.0.0.1"):
+    def __init__(self, scraper: Optional['UnityScraper'] = None, port: int = 8000, host: str = "127.0.0.1"):
         self.app = Flask(__name__)
         CORS(self.app)  # Enable CORS
         
-        self.scraper = scraper
+        self.scraper: Optional['UnityScraper'] = scraper
         self.port = port
         self.host = host
         self.running = False
@@ -44,6 +47,8 @@ class UnityScraperAPI:
         def get_titleids():
             """Get all TitleIDs in database"""
             try:
+                if not self.scraper:
+                    return jsonify({'error': 'Scraper not initialized'}), 400
                 titleids = self.scraper.db.search_titleids('')
                 return jsonify({'titleids': titleids})
             except Exception as e:
@@ -53,6 +58,8 @@ class UnityScraperAPI:
         def get_titleid_info(titleid):
             """Get info for specific TitleID"""
             try:
+                if not self.scraper:
+                    return jsonify({'error': 'Scraper not initialized'}), 400
                 info = self.scraper.db.get_titleid_info(titleid)
                 if info:
                     return jsonify(info)
@@ -65,6 +72,8 @@ class UnityScraperAPI:
             """Search TitleIDs"""
             query = request.args.get('q', '')
             try:
+                if not self.scraper:
+                    return jsonify({'error': 'Scraper not initialized'}), 400
                 results = self.scraper.db.search_titleids(query)
                 return jsonify({'results': results, 'count': len(results)})
             except Exception as e:
@@ -74,6 +83,8 @@ class UnityScraperAPI:
         def collect_metadata(titleid):
             """Collect metadata for TitleID"""
             try:
+                if not self.scraper:
+                    return jsonify({'error': 'Scraper not initialized'}), 400
                 success = self.scraper.collect_metadata(titleid)
                 return jsonify({
                     'success': success,
@@ -87,6 +98,8 @@ class UnityScraperAPI:
         def download_titleid(titleid):
             """Download content for TitleID"""
             try:
+                if not self.scraper:
+                    return jsonify({'error': 'Scraper not initialized'}), 400
                 success = self.scraper.process_titleid(titleid)
                 return jsonify({
                     'success': success,
@@ -100,6 +113,8 @@ class UnityScraperAPI:
         def get_stats():
             """Get database statistics"""
             try:
+                if not self.scraper:
+                    return jsonify({'error': 'Scraper not initialized'}), 400
                 stats = self.scraper.db.get_statistics()
                 return jsonify(stats)
             except Exception as e:
@@ -110,6 +125,8 @@ class UnityScraperAPI:
             """Get all failed downloads"""
             titleid = request.args.get('titleid')
             try:
+                if not self.scraper:
+                    return jsonify({'error': 'Scraper not initialized'}), 400
                 items = self.scraper.db.get_failed_items(titleid)
                 return jsonify({'failed_items': items, 'count': len(items)})
             except Exception as e:
@@ -120,6 +137,8 @@ class UnityScraperAPI:
             """Retry failed downloads"""
             titleid = request.args.get('titleid')
             try:
+                if not self.scraper:
+                    return jsonify({'error': 'Scraper not initialized'}), 400
                 self.scraper.retry_failed_downloads(titleid)
                 return jsonify({
                     'success': True,
@@ -133,9 +152,12 @@ class UnityScraperAPI:
             """Verify file integrity"""
             titleid = request.args.get('titleid')
             try:
+                if not self.scraper:
+                    return jsonify({'error': 'Scraper not initialized'}), 400
                 results = self.scraper.db.verify_file_integrity(titleid)
                 return jsonify(results)
             except Exception as e:
+                return jsonify({'error': str(e)}), 500
                 return jsonify({'error': str(e)}), 500
         
         @self.app.route('/api/export', methods=['GET'])
@@ -143,6 +165,8 @@ class UnityScraperAPI:
             """Export database"""
             format = request.args.get('format', 'json')
             try:
+                if not self.scraper:
+                    return jsonify({'error': 'Scraper not initialized'}), 400
                 filename = f"export_{format}.{format}"
                 self.scraper.export_database(format, filename)
                 return jsonify({
@@ -157,6 +181,8 @@ class UnityScraperAPI:
         def get_config():
             """Get current configuration"""
             try:
+                if not self.scraper:
+                    return jsonify({'error': 'Scraper not initialized'}), 400
                 config = {
                     'workers': self.scraper.config.workers,
                     'rate_limit': self.scraper.config.rate_limit,
@@ -173,6 +199,8 @@ class UnityScraperAPI:
         def update_config():
             """Update configuration"""
             try:
+                if not self.scraper:
+                    return jsonify({'error': 'Scraper not initialized'}), 400
                 data = request.get_json()
                 for key, value in data.items():
                     if hasattr(self.scraper.config, key):
