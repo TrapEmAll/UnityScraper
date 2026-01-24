@@ -1,97 +1,590 @@
-#!/usr/bin/env python3
+"""
+Enhanced UnityScraper - Main Module with HTTPS Support
+Improved version with better error handling, HTTPS fallback, and configuration
+"""
+
 import argparse
+import json
 import logging
+import os
 import sys
-from typing import List
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+from typing import List, Optional, Dict, Any
+from urllib.parse import urlparse
 
-from downloader import UnityScraper
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+from database import DatabaseManager
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('unityscraper.log')
+    ]
+)
+logger = logging.getLogger(__name__)
 
 
-def _split_title_ids(raw: str) -> List[str]:
-    """
-    Split a comma-separated string into TitleID tokens.
-    """
-    if not raw:
-        return []
-    return [x.strip() for x in raw.split(",") if x.strip()]
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Download Xbox cover art & title updates for given Xbox Title IDs "
-            "via xboxunity.net. Outputs default to 'unityscrape/{title_id}/...'."
-        )
-    )
-
-    # Make it optional so "python main.py" matches your README flow (prompt)
-    parser.add_argument(
-        "title_ids",
-        nargs="?",
-        default="",
-        help="Comma-separated Title IDs, e.g. '555308C5,00000155'.",
-    )
-
-    parser.add_argument(
-        "--out",
-        default="unityscrape",
-        help="Output base directory (default: unityscrape).",
-    )
-
-    parser.add_argument(
-        "--workers",
-        type=int,
-        default=UnityScraper.DEFAULT_MAX_WORKERS,
-        help=f"Parallel worker threads per TitleID (default: {UnityScraper.DEFAULT_MAX_WORKERS}).",
-    )
-
-    parser.add_argument(
-        "--rate",
-        type=float,
-        default=0.35,
-        help="Minimum seconds between HTTP requests across all threads (default: 0.35).",
-    )
-
-    parser.add_argument(
-        "--log-level",
-        default="INFO",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-        help="Logging level (default: INFO).",
-    )
-
-    args = parser.parse_args()
-
-    # Configure logging level
-    logging.getLogger("downloader").setLevel(getattr(logging, args.log_level))
-
-    raw_ids = args.title_ids.strip()
-    if not raw_ids:
-        # Matches README: prompt if not provided
+class Config:
+    """Configuration management with defaults"""
+    def __init__(self, config_file: Optional[str] = None):
+        self.base_url = "https://xboxunity.net"  # Try HTTPS first
+        self.http_fallback_url = "http://xboxunity.net"
+        self.api_endpoints = {
+            'covers': '/Resources/Lib/CoverInfo.php?titleid=',
+            'updates': '/Resources/Lib/TitleUpdateInfo.php?titleid='
+        }
+        self.output_dir = Path("unityscrape")
+        self.workers = 4
+        self.rate_limit = 0.35
+        self.timeout = 30
+        self.max_retries = 3
+        self.retry_backoff = 2.0
+        self.use_https = True  # Prefer HTTPS
+        
+        if config_file and Path(config_file).exists():
+            self.load_from_file(config_file)
+    
+    def load_from_file(self, config_file: str):
+        """Load configuration from JSON file"""
         try:
-            raw_ids = input("Enter TitleIDs separated by commas: ").strip()
-        except KeyboardInterrupt:
-            print("\nCancelled.")
-            sys.exit(1)
+            with open(config_file, 'r') as f:
+                config_data = json.load(f)
+                for key, value in config_data.items():
+                    if hasattr(self, key):
+                        setattr(self, key, value)
+                logger.info(f"Loaded configuration from {config_file}")
+        except Exception as e:
+            logger.warning(f"Failed to load config file: {e}, using defaults")
+    
+    def save_to_file(self, config_file: str = "config.json"):
+        """Save current configuration to JSON file"""
+        config_data = {
+            'output_dir': str(self.output_dir),
+            'workers': self.workers,
+            'rate_limit': self.rate_limit,
+            'timeout': self.timeout,
+            'max_retries': self.max_retries,
+            'retry_backoff': self.retry_backoff,
+            'use_https': self.use_https
+        }
+        with open(config_file, 'w') as f:
+            json.dump(config_data, f, indent=2)
+        logger.info(f"Saved configuration to {config_file}")
 
-    title_ids = _split_title_ids(raw_ids)
-    if not title_ids:
-        print("No TitleIDs provided. Exiting.")
-        return
 
-    scraper = UnityScraper(
-        base_dir=args.out,
-        max_workers=args.workers,
-        min_request_interval=args.rate,
+class RateLimiter:
+    """Thread-safe rate limiter"""
+    def __init__(self, min_interval: float):
+        self.min_interval = min_interval
+        self.last_request = 0
+        import threading
+        self._lock = threading.Lock()
+    
+    def wait(self):
+        """Wait if necessary to maintain rate limit"""
+        with self._lock:
+            now = time.time()
+            elapsed = now - self.last_request
+            if elapsed < self.min_interval:
+                time.sleep(self.min_interval - elapsed)
+            self.last_request = time.time()
+
+
+def load_titleids_from_json(json_file: str = "JSON.txt") -> List[str]:
+    """Load TitleIDs from JSON.txt file (comma-separated format)"""
+    try:
+        json_path = Path(json_file)
+        if not json_path.exists():
+            logger.warning(f"JSON file not found: {json_file}")
+            return []
+        
+        with open(json_path, 'r') as f:
+            content = f.read().strip()
+            titleids = [tid.strip() for tid in content.split(',') if tid.strip()]
+            logger.info(f"Loaded {len(titleids)} TitleIDs from {json_file}")
+            return titleids
+    except Exception as e:
+        logger.error(f"Failed to load TitleIDs from {json_file}: {e}")
+        return []
+
+
+class UnityScraper:
+    """Main scraper class with HTTPS support and fallback"""
+    
+    def __init__(self, config: Config):
+        self.config = config
+        self.rate_limiter = RateLimiter(config.rate_limit)
+        self.session = self._create_session()
+        self.db = DatabaseManager()  # Initialize database
+        self._test_connection()
+    
+    def _create_session(self) -> requests.Session:
+        """Create session with retry strategy"""
+        session = requests.Session()
+        
+        retry_strategy = Retry(
+            total=self.config.max_retries,
+            backoff_factor=self.config.retry_backoff,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET", "POST"]
+        )
+        
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+        
+        return session
+    
+    def _test_connection(self):
+        """Test HTTPS/HTTP connectivity and set preferred protocol"""
+        if self.config.use_https:
+            try:
+                logger.info("Testing HTTPS connection...")
+                response = self.session.get(
+                    self.config.base_url,
+                    timeout=10,
+                    allow_redirects=True
+                )
+                response.raise_for_status()
+                logger.info("[OK] HTTPS connection successful")
+                return
+            except Exception as e:
+                logger.warning(f"HTTPS failed: {e}")
+                logger.info("Falling back to HTTP...")
+                self.config.use_https = False
+                self.config.base_url = self.config.http_fallback_url
+        
+        try:
+            response = self.session.get(
+                self.config.base_url,
+                timeout=10
+            )
+            response.raise_for_status()
+            logger.info("[OK] HTTP connection successful")
+        except Exception as e:
+            logger.error(f"Failed to connect to XboxUnity: {e}")
+            raise ConnectionError("Cannot connect to XboxUnity.net")
+    
+    def _make_request(self, url: str, retry_count: int = 0) -> Optional[requests.Response]:
+        """Make HTTP request with rate limiting and retry logic"""
+        self.rate_limiter.wait()
+        
+        try:
+            response = self.session.get(url, timeout=self.config.timeout)
+            
+            if response.status_code == 429:
+                wait_time = min(60, (2 ** retry_count) * self.config.retry_backoff)
+                logger.warning(f"Rate limited (429). Waiting {wait_time}s...")
+                time.sleep(wait_time)
+                if retry_count < self.config.max_retries:
+                    return self._make_request(url, retry_count + 1)
+                return None
+            
+            response.raise_for_status()
+            return response
+            
+        except requests.exceptions.Timeout:
+            logger.error(f"Timeout fetching {url}")
+            if retry_count < self.config.max_retries:
+                time.sleep(self.config.retry_backoff * (retry_count + 1))
+                return self._make_request(url, retry_count + 1)
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Request failed for {url}: {e}")
+            if retry_count < self.config.max_retries:
+                time.sleep(self.config.retry_backoff * (retry_count + 1))
+                return self._make_request(url, retry_count + 1)
+        
+        return None
+    
+    @staticmethod
+    def validate_titleid(titleid: str) -> Optional[str]:
+        """Validate and normalize TitleID"""
+        titleid = titleid.strip().upper()
+        if len(titleid) == 8 and all(c in '0123456789ABCDEF' for c in titleid):
+            return titleid
+        logger.warning(f"Invalid TitleID format: {titleid}")
+        return None
+    
+    def fetch_json_data(self, endpoint: str, titleid: str) -> Optional[Dict[str, Any]]:
+        """Fetch JSON data from API endpoint"""
+        url = f"{self.config.base_url}{endpoint}{titleid}"
+        logger.info(f"Fetching {endpoint} for {titleid}...")
+        
+        response = self._make_request(url)
+        if response:
+            try:
+                return response.json()
+            except json.JSONDecodeError:
+                logger.error(f"Invalid JSON response from {url}")
+        return None
+    
+    def download_file(self, url: str, dest_path: Path) -> bool:
+        """Download file to destination with progress"""
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        response = self._make_request(url)
+        if not response:
+            return False
+        
+        try:
+            total_size = int(response.headers.get('content-length', 0))
+            
+            with open(dest_path, 'wb') as f:
+                if total_size == 0:
+                    f.write(response.content)
+                else:
+                    downloaded = 0
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            # Progress indicator could be added here
+            
+            logger.info(f"[OK] Downloaded: {dest_path.name}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to download {url}: {e}")
+            if dest_path.exists():
+                dest_path.unlink()
+            return False
+    
+    def collect_metadata(self, titleid: str) -> bool:
+        """Collect and store metadata for a TitleID without downloading files"""
+        titleid = self.validate_titleid(titleid)
+        if not titleid:
+            return False
+        
+        logger.info(f"{'='*60}")
+        logger.info(f"Collecting metadata for TitleID: {titleid}")
+        logger.info(f"{'='*60}")
+        
+        # Add TitleID to database
+        self.db.add_titleid(titleid)
+        
+        # Fetch and store covers metadata only
+        covers_data = self.fetch_json_data(self.config.api_endpoints['covers'], titleid)
+        if covers_data:
+            covers_list = covers_data.get('Covers', [])
+            if isinstance(covers_list, list):
+                for cover in covers_list:
+                    if isinstance(cover, dict):
+                        cover_id = cover.get('CoverID')
+                        if cover_id:
+                            # Store cover metadata WITHOUT downloading
+                            cover_url = f"{self.config.base_url}/Resources/Lib/Cover.php?size=large&cid={cover_id}"
+                            self.db.add_cover(
+                                titleid,
+                                cover_url=cover_url,
+                                cover_type=cover.get('CoverType', 'unknown'),
+                                metadata=cover
+                            )
+                            logger.info(f"Stored cover metadata: {cover_id}")
+        
+        # Fetch and store updates metadata only
+        updates_data = self.fetch_json_data(self.config.api_endpoints['updates'], titleid)
+        if updates_data:
+            media_list = updates_data.get('MediaIDS', updates_data.get('MediaIDs', []))
+            if isinstance(media_list, list):
+                for media in media_list:
+                    if isinstance(media, dict):
+                        media_id = media.get('MediaID')
+                        updates = media.get('Updates', [])
+                        
+                        if isinstance(updates, list):
+                            for update in updates:
+                                if isinstance(update, dict):
+                                    tuid = update.get('TitleUpdateID')
+                                    version = update.get('Version', 'unknown')
+                                    
+                                    if tuid:
+                                        # Store update metadata WITHOUT downloading
+                                        update_url = f"{self.config.base_url}/Resources/Lib/TitleUpdate.php?tuid={tuid}"
+                                        self.db.add_title_update(
+                                            titleid,
+                                            media_id=str(media_id),
+                                            version=str(version),
+                                            download_url=update_url,
+                                            metadata=update
+                                        )
+                                        logger.info(f"Stored update metadata: {tuid} v{version}")
+        
+        # Update database with scrape info
+        self.db.update_scrape_info(titleid)
+        
+        logger.info(f"[OK] Collected metadata for TitleID: {titleid}")
+        return True
+    
+    def process_titleid(self, titleid: str) -> bool:
+        """Process a single TitleID - download covers and updates"""
+        titleid = self.validate_titleid(titleid)
+        if not titleid:
+            return False
+        
+        logger.info(f"{'='*60}")
+        logger.info(f"Downloading content for TitleID: {titleid}")
+        logger.info(f"{'='*60}")
+        
+        output_dir = self.config.output_dir / titleid
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Fetch and download covers data
+        covers_data = self.fetch_json_data(self.config.api_endpoints['covers'], titleid)
+        if covers_data:
+            with open(output_dir / 'covers_data.json', 'w') as f:
+                json.dump(covers_data, f, indent=2)
+            self._download_covers(titleid, covers_data, output_dir)
+        
+        # Fetch and download updates data
+        updates_data = self.fetch_json_data(self.config.api_endpoints['updates'], titleid)
+        if updates_data:
+            with open(output_dir / 'updates_data.json', 'w') as f:
+                json.dump(updates_data, f, indent=2)
+            self._download_updates(titleid, updates_data, output_dir)
+        
+        logger.info(f"[OK] Completed downloads for TitleID: {titleid}")
+        return True
+    
+    def _download_covers(self, titleid: str, covers_data: Dict, output_dir: Path):
+        """Download cover images and mark as downloaded in database"""
+        covers_list = covers_data.get('Covers', [])
+        if not isinstance(covers_list, list):
+            return
+        
+        covers_dir = output_dir / 'covers'
+        covers_dir.mkdir(exist_ok=True)
+        
+        for cover in covers_list:
+            if isinstance(cover, dict):
+                cover_id = cover.get('CoverID')
+                if cover_id:
+                    # Construct the cover image download URL
+                    cover_url = f"{self.config.base_url}/Resources/Lib/Cover.php?size=large&cid={cover_id}"
+                    filename = f"cover_{cover_id}.jpg"
+                    cover_path = covers_dir / filename
+                    
+                    try:
+                        self.download_file(cover_url, cover_path)
+                        download_status = 'downloaded'
+                    except Exception as e:
+                        logger.error(f"Failed to download cover {cover_id}: {e}")
+                        download_status = 'failed'
+                        cover_path = None
+                    
+                    # Store cover metadata in database with status
+                    self.db.add_cover(
+                        titleid,
+                        cover_url=cover_url,
+                        file_path=str(cover_path) if cover_path else None,
+                        cover_type=cover.get('CoverType', 'unknown'),
+                        status=download_status,
+                        metadata=cover
+                    )
+    
+    def _download_updates(self, titleid: str, updates_data: Dict, output_dir: Path):
+        """Download title updates and mark as downloaded in database"""
+        media_list = updates_data.get('MediaIDS', updates_data.get('MediaIDs', []))
+        if not isinstance(media_list, list):
+            return
+        
+        for media in media_list:
+            if isinstance(media, dict):
+                media_id = media.get('MediaID')
+                updates = media.get('Updates', [])
+                
+                if not isinstance(updates, list):
+                    continue
+                
+                for update in updates:
+                    if isinstance(update, dict):
+                        tuid = update.get('TitleUpdateID')
+                        version = update.get('Version', 'unknown')
+                        
+                        if tuid:
+                            # Construct the update download URL
+                            update_url = f"{self.config.base_url}/Resources/Lib/TitleUpdate.php?tuid={tuid}"
+                            update_dir = output_dir / str(media_id) / f"version_{version}"
+                            filename = f"update_{tuid}.bin"
+                            file_path = update_dir / filename
+                            
+                            try:
+                                self.download_file(update_url, file_path)
+                                download_status = 'downloaded'
+                            except Exception as e:
+                                logger.error(f"Failed to download update {tuid}: {e}")
+                                download_status = 'failed'
+                                file_path = None
+                            
+                            # Store update metadata in database with status
+                            self.db.add_title_update(
+                                titleid,
+                                media_id=str(media_id),
+                                version=str(version),
+                                download_url=update_url,
+                                file_path=str(file_path) if file_path else None,
+                                metadata=update,
+                                status=download_status
+                            )
+    
+    def process_multiple_titleids(self, titleids: List[str]):
+        """Process multiple TitleIDs with parallel workers"""
+        valid_titleids = [tid for tid in titleids if self.validate_titleid(tid)]
+        
+        if not valid_titleids:
+            logger.error("No valid TitleIDs to process")
+            return
+        
+        logger.info(f"Processing {len(valid_titleids)} TitleIDs with {self.config.workers} workers")
+        
+        with ThreadPoolExecutor(max_workers=self.config.workers) as executor:
+            futures = {executor.submit(self.process_titleid, tid): tid for tid in valid_titleids}
+            
+            for future in as_completed(futures):
+                titleid = futures[future]
+                try:
+                    future.result()
+                except Exception as e:
+                    logger.error(f"Error processing {titleid}: {e}")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='UnityScraper - Download Xbox 360 content from XboxUnity',
+        formatter_class=argparse.RawDescriptionHelpFormatter
     )
+    
+    parser.add_argument(
+        'titleids',
+        nargs='*',
+        help='Comma-separated TitleIDs (e.g., 555308C5,00000155)'
+    )
+    parser.add_argument(
+        '--out',
+        type=str,
+        help='Output directory (default: unityscrape)'
+    )
+    parser.add_argument(
+        '--workers',
+        type=int,
+        help='Number of parallel workers (default: 4)'
+    )
+    parser.add_argument(
+        '--rate',
+        type=float,
+        help='Minimum seconds between requests (default: 0.35)'
+    )
+    parser.add_argument(
+        '--config',
+        type=str,
+        help='Path to config.json file'
+    )
+    parser.add_argument(
+        '--save-config',
+        action='store_true',
+        help='Save current settings to config.json'
+    )
+    parser.add_argument(
+        '--log-level',
+        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+        default='INFO',
+        help='Logging level'
+    )
+    parser.add_argument(
+        '--force-http',
+        action='store_true',
+        help='Force HTTP instead of HTTPS'
+    )
+    parser.add_argument(
+        '--metadata-only',
+        action='store_true',
+        help='Only collect metadata without downloading files'
+    )
+    
+    args = parser.parse_args()
+    
+    # Set logging level
+    logging.getLogger().setLevel(getattr(logging, args.log_level))
+    
+    # Load configuration
+    config = Config(args.config)
+    
+    # Override with command-line arguments
+    if args.out:
+        config.output_dir = Path(args.out)
+    if args.workers:
+        config.workers = args.workers
+    if args.rate:
+        config.rate_limit = args.rate
+    if args.force_http:
+        config.use_https = False
+        config.base_url = config.http_fallback_url
+    
+    # Save config if requested
+    if args.save_config:
+        config.save_to_file()
+        logger.info("Configuration saved")
+    
+    # Get TitleIDs
+    titleids = []
+    metadata_only = args.metadata_only
+    
+    if args.titleids:
+        for arg in args.titleids:
+            titleids.extend([tid.strip() for tid in arg.split(',')])
+    else:
+        # Try to load from JSON.txt first
+        titleids = load_titleids_from_json()
+        
+        # Auto-enable metadata-only mode when loading from JSON.txt
+        if titleids:
+            metadata_only = True
+            logger.info("Loaded TitleIDs from JSON.txt - using metadata-only mode")
+        else:
+            user_input = input("Enter TitleIDs separated by commas: ").strip()
+            titleids = [tid.strip() for tid in user_input.split(',')]
+    
+    if not titleids:
+        logger.error("No TitleIDs provided")
+        sys.exit(1)
+    
+    # Run scraper
+    try:
+        scraper = UnityScraper(config)
+        
+        if metadata_only:
+            # Collect metadata only (for JSON.txt or --metadata-only flag)
+            logger.info(f"Collecting metadata for {len(titleids)} TitleIDs...")
+            with ThreadPoolExecutor(max_workers=config.workers) as executor:
+                futures = {executor.submit(scraper.collect_metadata, tid): tid for tid in titleids}
+                
+                for future in as_completed(futures):
+                    titleid = futures[future]
+                    try:
+                        future.result()
+                    except Exception as e:
+                        logger.error(f"Error collecting metadata for {titleid}: {e}")
+            logger.info("Metadata collection completed! Check GUI to view and download items.")
+        else:
+            # Download content
+            logger.info(f"Downloading content for {len(titleids)} TitleIDs...")
+            scraper.process_multiple_titleids(titleids)
+        
+        logger.info("All tasks completed!")
+    except KeyboardInterrupt:
+        logger.warning("Interrupted by user")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Fatal error: {e}")
+        sys.exit(1)
 
-    failed = scraper.scrape_multiple(title_ids)
 
-    if failed:
-        print(f"\nThe following TitleIDs had failures: {', '.join(failed)}")
-        sys.exit(2)
-
-    print("\nAll TitleIDs processed successfully.")
-
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
