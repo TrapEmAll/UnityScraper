@@ -748,6 +748,28 @@ def main():
         default=0,
         help='Days between automatic refreshes (0 = disabled)'
     )
+    parser.add_argument(
+        '--verify-integrity',
+        action='store_true',
+        help='Verify checksums of downloaded files'
+    )
+    parser.add_argument(
+        '--api-mode',
+        action='store_true',
+        help='Start REST API server instead of CLI mode'
+    )
+    parser.add_argument(
+        '--api-port',
+        type=int,
+        default=8000,
+        help='API server port (default: 8000)'
+    )
+    parser.add_argument(
+        '--api-host',
+        type=str,
+        default='127.0.0.1',
+        help='API server host (default: 127.0.0.1)'
+    )
     
     args = parser.parse_args()
     
@@ -756,6 +778,22 @@ def main():
     
     # Load configuration
     config = Config(args.config)
+    
+    # Handle API mode
+    if args.api_mode:
+        try:
+            from api import UnityScraperAPI
+            scraper = UnityScraper(config)
+            api = UnityScraperAPI(scraper, port=args.api_port, host=args.api_host)
+            logger.info(f"Starting API server on {args.api_host}:{args.api_port}")
+            logger.info("API documentation available at http://<host>:<port>/api/")
+            api.run(debug=args.log_level == 'DEBUG')
+        except ImportError:
+            logger.error("Flask not installed. Install with: pip install flask flask-cors")
+            sys.exit(1)
+        except Exception as e:
+            logger.error(f"Failed to start API server: {e}")
+            sys.exit(1)
     
     # Override with command-line arguments
     if args.out:
@@ -790,6 +828,29 @@ def main():
         deleted = scraper.db.cleanup_old_history(args.cleanup_days)
         logger.info(f"Cleaned up {deleted} old history entries")
         scraper.db.vacuum()
+        sys.exit(0)
+    
+    # Handle integrity check
+    if args.verify_integrity:
+        logger.info(f"{'='*60}")
+        logger.info("Verifying file integrity...")
+        logger.info(f"{'='*60}")
+        results = scraper.db.verify_file_integrity()
+        logger.info(f"Total files checked: {results['total']}")
+        logger.info(f"Verified: {len(results['verified'])}")
+        logger.info(f"Corrupted: {len(results['corrupted'])}")
+        logger.info(f"Missing: {len(results['missing'])}")
+        
+        if results['corrupted']:
+            logger.warning("Corrupted files detected:")
+            for item in results['corrupted']:
+                logger.warning(f"  {item['type']} {item['id']}: {item['path']}")
+        
+        if results['missing']:
+            logger.warning("Missing files detected:")
+            for item in results['missing']:
+                logger.warning(f"  {item['type']} {item['id']}")
+        
         sys.exit(0)
     
     # Handle retry failed

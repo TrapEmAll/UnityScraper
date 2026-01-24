@@ -31,8 +31,15 @@ venv/
 *.db
 *.sqlite
 unityscraper.log
+unityscraper_gui.log
 config.json
 unityscrape/
+download_queue.json
+
+# Temporary and partial files
+*.tmp
+*.partial
+*.meta
 
 # OS files
 .DS_Store
@@ -43,3 +50,8 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# IDE Extensions
+/.vs/
+.vscode/settings.json
+.idea/

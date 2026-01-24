@@ -1,6 +1,6 @@
 """
 Enhanced UnityScraper GUI with HTTPS Support
-Modern Tkinter interface with improved features
+Modern Tkinter interface with improved features and i18n support
 """
 
 import tkinter as tk
@@ -11,12 +11,16 @@ import logging
 from pathlib import Path
 from typing import Optional
 import sys
+from datetime import datetime, timedelta
 
 # Import the main scraper (assumes main.py is in same directory)
 try:
     from main import UnityScraper, Config
-except ImportError:
-    print("Error: main.py not found. Please ensure main.py is in the same directory.")
+    from i18n import init_translator, get_translator, t
+    from updater import VersionChecker
+    from queue_manager import DownloadQueue
+except ImportError as e:
+    print(f"Error: Missing required module: {e}")
     sys.exit(1)
 
 
@@ -36,8 +40,11 @@ class UnityScraperGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("UnityScraper - Enhanced Edition")
-        self.root.geometry("900x700")
+        self.root.geometry("1100x800")
         self.root.resizable(True, True)
+        
+        # Initialize i18n
+        init_translator('en')
         
         # State variables
         self.config = Config()
@@ -45,6 +52,8 @@ class UnityScraperGUI:
         self.is_running = False
         self.stop_requested = False
         self.log_queue = queue.Queue()
+        self.download_queue = DownloadQueue()
+        self.download_progress = {}
         
         # Setup GUI
         self.setup_styles()
@@ -276,6 +285,83 @@ class UnityScraperGUI:
             width=15
         )
         stats_btn.grid(row=1, column=3, padx=5)
+        
+        # New feature buttons
+        integrity_btn = ttk.Button(
+            button_frame,
+            text="Verify Files",
+            command=self.verify_integrity,
+            width=15
+        )
+        integrity_btn.grid(row=2, column=0, padx=5, pady=5)
+        
+        check_update_btn = ttk.Button(
+            button_frame,
+            text="Check Updates",
+            command=self.check_for_updates,
+            width=15
+        )
+        check_update_btn.grid(row=2, column=1, padx=5, pady=5)
+        
+        queue_btn = ttk.Button(
+            button_frame,
+            text="View Queue",
+            command=self.show_download_queue,
+            width=15
+        )
+        queue_btn.grid(row=2, column=2, padx=5, pady=5)
+        
+        language_label = ttk.Label(button_frame, text="Language:")
+        language_label.grid(row=2, column=3, sticky=tk.W, padx=5)
+        
+        self.language_var = tk.StringVar(value="en")
+        language_combo = ttk.Combobox(
+            button_frame,
+            textvariable=self.language_var,
+            values=["en", "es", "fr", "de", "ja"],
+            width=8,
+            state='readonly'
+        )
+        language_combo.grid(row=2, column=3, sticky=tk.E, padx=5)
+        language_combo.bind('<<ComboboxSelected>>', self.on_language_change)
+        
+        # Filters frame
+        filter_frame = ttk.LabelFrame(main_frame, text="Filters", padding="10")
+        filter_frame.grid(row=6, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
+        filter_frame.columnconfigure(1, weight=1)
+        filter_frame.columnconfigure(3, weight=1)
+        
+        ttk.Label(filter_frame, text="Filter by Status:").grid(row=0, column=0, sticky=tk.W, padx=5)
+        self.status_filter_var = tk.StringVar(value="all")
+        status_combo = ttk.Combobox(
+            filter_frame,
+            textvariable=self.status_filter_var,
+            values=["all", "pending", "downloaded", "failed"],
+            width=15,
+            state='readonly'
+        )
+        status_combo.grid(row=0, column=1, sticky=tk.W, padx=5)
+        status_combo.bind('<<ComboboxSelected>>', lambda e: self.apply_filters())
+        
+        ttk.Label(filter_frame, text="Filter by Date:").grid(row=0, column=2, sticky=tk.W, padx=5)
+        self.date_filter_var = tk.StringVar(value="any")
+        date_combo = ttk.Combobox(
+            filter_frame,
+            textvariable=self.date_filter_var,
+            values=["any", "last_7_days", "last_30_days", "custom"],
+            width=15,
+            state='readonly'
+        )
+        date_combo.grid(row=0, column=3, sticky=tk.W, padx=5)
+        date_combo.bind('<<ComboboxSelected>>', lambda e: self.apply_filters())
+        
+        # Filter results display
+        self.filter_results_text = ttk.Label(
+            filter_frame,
+            text="Results: 0 items",
+            style='Subtitle.TLabel'
+        )
+        self.filter_results_text.grid(row=1, column=0, columnspan=4, sticky=tk.W, padx=5, pady=5)
         
         # Progress bar
         self.progress = ttk.Progressbar(main_frame, mode='indeterminate')
@@ -519,7 +605,199 @@ Most Scraped:
         thread = threading.Thread(target=get_stats, daemon=True)
         thread.start()
     
-    def start_download(self):
+    def verify_integrity(self):
+        """Verify file integrity"""
+        self.update_config_from_gui()
+        
+        def verify():
+            try:
+                self.scraper = UnityScraper(self.config)
+                results = self.scraper.db.verify_file_integrity()
+                
+                stats_text = f"""File Integrity Check Results:
+
+Total Files Checked: {results['total']}
+Verified: {len(results['verified'])}
+Corrupted: {len(results['corrupted'])}
+Missing: {len(results['missing'])}
+"""
+                
+                if results['corrupted']:
+                    stats_text += "\nCorrupted Files:\n"
+                    for item in results['corrupted'][:5]:
+                        stats_text += f"  - {item['path']}\n"
+                    if len(results['corrupted']) > 5:
+                        stats_text += f"  ... and {len(results['corrupted']) - 5} more\n"
+                
+                if results['missing']:
+                    stats_text += "\nMissing Files:\n"
+                    for item in results['missing'][:5]:
+                        stats_text += f"  - {item.get('id', 'unknown')}\n"
+                    if len(results['missing']) > 5:
+                        stats_text += f"  ... and {len(results['missing']) - 5} more\n"
+                
+                logging.info("File integrity verification completed")
+                self.root.after(0, lambda: messagebox.showinfo(
+                    "File Integrity Check",
+                    stats_text
+                ))
+            except Exception as e:
+                logging.error(f"Integrity check error: {e}")
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Error",
+                    f"Integrity check failed: {str(e)}"
+                ))
+        
+        thread = threading.Thread(target=verify, daemon=True)
+        thread.start()
+    
+    def check_for_updates(self):
+        """Check for application updates"""
+        def check():
+            try:
+                checker = VersionChecker()
+                update_info = checker.check_for_updates()
+                
+                if update_info and update_info.get('new_version'):
+                    message = f"""
+New Version Available!
+
+Current: Unknown
+Latest: {update_info.get('version', 'Unknown')}
+
+Changes:
+{update_info.get('changes', 'No changelog available')}
+
+Download: {update_info.get('download_url', 'GitHub')}
+"""
+                    self.root.after(0, lambda: messagebox.showinfo(
+                        "Update Available",
+                        message
+                    ))
+                else:
+                    self.root.after(0, lambda: messagebox.showinfo(
+                        "No Updates",
+                        "You are running the latest version!"
+                    ))
+            except Exception as e:
+                logging.error(f"Update check error: {e}")
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Error",
+                    f"Failed to check for updates: {str(e)}"
+                ))
+        
+        thread = threading.Thread(target=check, daemon=True)
+        thread.start()
+    
+    def show_download_queue(self):
+        """Show download queue status"""
+        def show_queue():
+            try:
+                queue_stats = self.download_queue.get_queue_stats()
+                
+                stats_text = f"""Download Queue Status:
+
+Total Items: {queue_stats['total']}
+Queued: {queue_stats['queued']}
+Downloading: {queue_stats['downloading']}
+Completed: {queue_stats['completed']}
+Failed: {queue_stats['failed']}
+"""
+                logging.info("Queue status displayed")
+                self.root.after(0, lambda: messagebox.showinfo(
+                    "Download Queue",
+                    stats_text
+                ))
+            except Exception as e:
+                logging.error(f"Queue error: {e}")
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Error",
+                    f"Failed to display queue: {str(e)}"
+                ))
+        
+        thread = threading.Thread(target=show_queue, daemon=True)
+        thread.start()
+    
+    def apply_filters(self):
+        """Apply status and date filters to database results"""
+        status_filter = self.status_filter_var.get()
+        date_filter = self.date_filter_var.get()
+        
+        try:
+            from database import DatabaseManager
+            db = DatabaseManager()
+            
+            # Get all items
+            all_items = []
+            
+            # Get covers and updates
+            for titleid_info in db.search_titleids(''):
+                titleid = titleid_info.get('titleid')
+                
+                covers = db.db.execute(
+                    'SELECT * FROM covers WHERE titleid = ?',
+                    (titleid,)
+                ).fetchall() if hasattr(db, 'db') else []
+                
+                updates = db.db.execute(
+                    'SELECT * FROM title_updates WHERE titleid = ?',
+                    (titleid,)
+                ).fetchall() if hasattr(db, 'db') else []
+                
+                for item in covers:
+                    if status_filter == 'all' or item.get('status') == status_filter:
+                        all_items.append({
+                            'type': 'cover',
+                            'titleid': titleid,
+                            'status': item.get('status'),
+                            'date': item.get('download_date')
+                        })
+                
+                for item in updates:
+                    if status_filter == 'all' or item.get('status') == status_filter:
+                        all_items.append({
+                            'type': 'update',
+                            'titleid': titleid,
+                            'status': item.get('status'),
+                            'date': item.get('download_date')
+                        })
+            
+            # Apply date filter
+            filtered_items = all_items
+            if date_filter != 'any':
+                now = datetime.now()
+                if date_filter == 'last_7_days':
+                    cutoff = now - timedelta(days=7)
+                elif date_filter == 'last_30_days':
+                    cutoff = now - timedelta(days=30)
+                else:
+                    cutoff = now
+                
+                filtered_items = [
+                    item for item in all_items
+                    if item.get('date') and datetime.fromisoformat(item['date']) >= cutoff
+                ]
+            
+            result_text = f"Results: {len(filtered_items)} items (Status: {status_filter}, Date: {date_filter})"
+            self.filter_results_text.config(text=result_text)
+            logging.info(result_text)
+        
+        except Exception as e:
+            logging.error(f"Filter error: {e}")
+            self.filter_results_text.config(text=f"Filter error: {str(e)}")
+    
+    def on_language_change(self, event=None):
+        """Handle language change"""
+        lang = self.language_var.get()
+        try:
+            init_translator(lang)
+            translator = get_translator()
+            translator.set_language(lang)
+            logging.info(f"Language changed to: {lang}")
+            messagebox.showinfo("Language Changed", f"UI language changed to {lang.upper()}")
+        except Exception as e:
+            logging.error(f"Language change error: {e}")
+            messagebox.showerror("Error", f"Failed to change language: {str(e)}")
         """Start download process"""
         titleids_input = self.titleids_entry.get().strip()
         if not titleids_input:

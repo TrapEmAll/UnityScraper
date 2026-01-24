@@ -8,7 +8,7 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Optional, Callable
+from typing import Optional, Callable, Dict
 import requests
 
 logger = logging.getLogger(__name__)
@@ -22,11 +22,26 @@ class DownloadProgress:
         self.downloaded = 0
         self.start_time = time.time()
         self.last_update = time.time()
+        self.speed_samples = []  # Track speed over time
+        self.peak_speed = 0.0
+        self.avg_speed = 0.0
     
     def update(self, chunk_size: int):
         """Update progress"""
         self.downloaded += chunk_size
         self.last_update = time.time()
+        
+        # Calculate instant speed
+        elapsed_total = time.time() - self.start_time
+        if elapsed_total > 0:
+            instant_speed = (self.downloaded / (1024 * 1024)) / elapsed_total
+            self.speed_samples.append(instant_speed)
+            
+            if instant_speed > self.peak_speed:
+                self.peak_speed = instant_speed
+            
+            if self.speed_samples:
+                self.avg_speed = sum(self.speed_samples) / len(self.speed_samples)
     
     @property
     def percentage(self) -> float:
@@ -53,12 +68,22 @@ class DownloadProgress:
         remaining = self.total_size - self.downloaded
         return remaining / rate if rate > 0 else None
     
+    def get_stats(self) -> Dict[str, float]:
+        """Get comprehensive speed statistics"""
+        return {
+            'current_speed': self.speed_mbps,
+            'peak_speed': self.peak_speed,
+            'average_speed': self.avg_speed,
+            'percentage': self.percentage,
+            'eta_seconds': self.eta_seconds or 0
+        }
+    
     def __str__(self) -> str:
         eta = self.eta_seconds
         eta_str = f"{int(eta)}s" if eta else "N/A"
         return (f"{self.filepath.name}: {self.percentage:.1f}% "
                 f"({self.downloaded}/{self.total_size} bytes) "
-                f"Speed: {self.speed_mbps:.2f} MB/s ETA: {eta_str}")
+                f"Speed: {self.speed_mbps:.2f} MB/s (Peak: {self.peak_speed:.2f} MB/s) ETA: {eta_str}")
 
 
 class ResumableDownloader:

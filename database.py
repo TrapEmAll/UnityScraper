@@ -571,6 +571,84 @@ class DatabaseManager:
             logger.error(f"CSV export failed: {e}")
             return False
     
+    def verify_file_integrity(self, titleid: Optional[str] = None) -> Dict[str, Any]:
+        """Verify checksums of downloaded files against database records"""
+        import hashlib
+        from pathlib import Path
+        
+        results = {
+            'verified': [],
+            'corrupted': [],
+            'missing': [],
+            'total': 0
+        }
+        
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Get items to verify
+                if titleid:
+                    cursor.execute('''
+                        SELECT "cover" as type, id, file_path, checksum FROM covers 
+                        WHERE status = "downloaded" AND titleid = ?
+                        UNION ALL
+                        SELECT "update" as type, id, file_path, checksum FROM title_updates 
+                        WHERE status = "downloaded" AND titleid = ?
+                    ''', (titleid, titleid))
+                else:
+                    cursor.execute('''
+                        SELECT "cover" as type, id, file_path, checksum FROM covers 
+                        WHERE status = "downloaded"
+                        UNION ALL
+                        SELECT "update" as type, id, file_path, checksum FROM title_updates 
+                        WHERE status = "downloaded"
+                    ''')
+                
+                items = cursor.fetchall()
+                results['total'] = len(items)
+                
+                for item in items:
+                    item_type, item_id, file_path, expected_checksum = item
+                    
+                    if not file_path:
+                        results['missing'].append({'type': item_type, 'id': item_id})
+                        continue
+                    
+                    path = Path(file_path)
+                    if not path.exists():
+                        results['missing'].append({'type': item_type, 'id': item_id, 'path': str(path)})
+                        continue
+                    
+                    # Calculate file checksum if expected checksum exists
+                    if expected_checksum:
+                        actual_checksum = self._calculate_file_checksum(path)
+                        if actual_checksum == expected_checksum:
+                            results['verified'].append({'type': item_type, 'id': item_id})
+                        else:
+                            results['corrupted'].append({
+                                'type': item_type, 'id': item_id, 'path': str(path),
+                                'expected': expected_checksum, 'actual': actual_checksum
+                            })
+                    else:
+                        results['verified'].append({'type': item_type, 'id': item_id})
+                
+                logger.info(f"Integrity check: {len(results['verified'])} verified, "
+                           f"{len(results['corrupted'])} corrupted, {len(results['missing'])} missing")
+                return results
+                
+        except Exception as e:
+            logger.error(f"Integrity check failed: {e}")
+            return results
+    
+    def _calculate_file_checksum(self, filepath: Path, algorithm: str = 'sha256') -> str:
+        """Calculate file checksum"""
+        hash_func = hashlib.new(algorithm)
+        with open(filepath, 'rb') as f:
+            for chunk in iter(lambda: f.read(4096), b''):
+                hash_func.update(chunk)
+        return hash_func.hexdigest()
+    
     def vacuum(self):
         """Optimize database"""
         try:
