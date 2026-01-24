@@ -13,12 +13,16 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from urllib.parse import urlparse
+from datetime import datetime, timedelta
+import hashlib
 
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from database import DatabaseManager
+from plugins import PluginManager
+from resume import ResumableDownloader
 
 # Configure logging
 logging.basicConfig(
@@ -48,6 +52,10 @@ class Config:
         self.max_retries = 3
         self.retry_backoff = 2.0
         self.use_https = True  # Prefer HTTPS
+        self.bandwidth_limit = 0  # KB/s, 0 = unlimited
+        self.verify_checksums = False
+        self.dry_run = False
+        self.refresh_interval_days = 0  # 0 = no auto-refresh
         
         if config_file and Path(config_file).exists():
             self.load_from_file(config_file)
@@ -73,7 +81,11 @@ class Config:
             'timeout': self.timeout,
             'max_retries': self.max_retries,
             'retry_backoff': self.retry_backoff,
-            'use_https': self.use_https
+            'use_https': self.use_https,
+            'bandwidth_limit': self.bandwidth_limit,
+            'verify_checksums': self.verify_checksums,
+            'dry_run': self.dry_run,
+            'refresh_interval_days': self.refresh_interval_days
         }
         with open(config_file, 'w') as f:
             json.dump(config_data, f, indent=2)
@@ -124,6 +136,8 @@ class UnityScraper:
         self.rate_limiter = RateLimiter(config.rate_limit)
         self.session = self._create_session()
         self.db = DatabaseManager()  # Initialize database
+        self.plugin_manager = PluginManager()  # Initialize plugin system
+        self.downloader = ResumableDownloader(self.session, config.timeout, config.bandwidth_limit)
         self._test_connection()
     
     def _create_session(self) -> requests.Session:
@@ -213,6 +227,53 @@ class UnityScraper:
         logger.warning(f"Invalid TitleID format: {titleid}")
         return None
     
+    def get_download_size_estimate(self, titleid: str) -> Dict[str, int]:
+        """Estimate total download size before downloading"""
+        titleid = self.validate_titleid(titleid)
+        if not titleid:
+            return {'covers_bytes': 0, 'updates_bytes': 0, 'total_bytes': 0}
+        
+        total_covers = 0
+        total_updates = 0
+        
+        # Estimate cover sizes
+        covers_data = self.fetch_json_data(self.config.api_endpoints['covers'], titleid)
+        if covers_data:
+            covers_list = covers_data.get('Covers', [])
+            if isinstance(covers_list, list):
+                for cover in covers_list:
+                    if isinstance(cover, dict):
+                        cover_id = cover.get('CoverID')
+                        if cover_id:
+                            cover_url = f"{self.config.base_url}/Resources/Lib/Cover.php?size=large&cid={cover_id}"
+                            size = self.downloader.get_remote_size(cover_url)
+                            if size:
+                                total_covers += size
+        
+        # Estimate update sizes
+        updates_data = self.fetch_json_data(self.config.api_endpoints['updates'], titleid)
+        if updates_data:
+            media_list = updates_data.get('MediaIDS', updates_data.get('MediaIDs', []))
+            if isinstance(media_list, list):
+                for media in media_list:
+                    if isinstance(media, dict):
+                        updates = media.get('Updates', [])
+                        if isinstance(updates, list):
+                            for update in updates:
+                                if isinstance(update, dict):
+                                    tuid = update.get('TitleUpdateID')
+                                    if tuid:
+                                        update_url = f"{self.config.base_url}/Resources/Lib/TitleUpdate.php?tuid={tuid}"
+                                        size = self.downloader.get_remote_size(update_url)
+                                        if size:
+                                            total_updates += size
+        
+        return {
+            'covers_bytes': total_covers,
+            'updates_bytes': total_updates,
+            'total_bytes': total_covers + total_updates
+        }
+    
     def fetch_json_data(self, endpoint: str, titleid: str) -> Optional[Dict[str, Any]]:
         """Fetch JSON data from API endpoint"""
         url = f"{self.config.base_url}{endpoint}{titleid}"
@@ -228,6 +289,10 @@ class UnityScraper:
     
     def download_file(self, url: str, dest_path: Path) -> bool:
         """Download file to destination with progress"""
+        if self.config.dry_run:
+            logger.info(f"[DRY RUN] Would download: {url} → {dest_path}")
+            return True
+        
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         
         response = self._make_request(url)
@@ -267,8 +332,22 @@ class UnityScraper:
         logger.info(f"Collecting metadata for TitleID: {titleid}")
         logger.info(f"{'='*60}")
         
+        # Check if refresh is needed (feature 6)
+        if self.config.refresh_interval_days > 0:
+            titleid_info = self.db.get_titleid_info(titleid)
+            if titleid_info and titleid_info.get('last_scraped'):
+                last_scraped = datetime.fromisoformat(titleid_info['last_scraped'])
+                days_since = (datetime.now() - last_scraped).days
+                if days_since < self.config.refresh_interval_days:
+                    logger.info(f"Skipping refresh for {titleid} (last scraped {days_since} days ago)")
+                    return True
+        
         # Add TitleID to database
         self.db.add_titleid(titleid)
+        
+        # Batch lists for concurrent inserts (feature 15)
+        covers_batch = []
+        updates_batch = []
         
         # Fetch and store covers metadata only
         covers_data = self.fetch_json_data(self.config.api_endpoints['covers'], titleid)
@@ -281,13 +360,18 @@ class UnityScraper:
                         if cover_id:
                             # Store cover metadata WITHOUT downloading
                             cover_url = f"{self.config.base_url}/Resources/Lib/Cover.php?size=large&cid={cover_id}"
-                            self.db.add_cover(
-                                titleid,
-                                cover_url=cover_url,
-                                cover_type=cover.get('CoverType', 'unknown'),
-                                metadata=cover
-                            )
+                            covers_batch.append({
+                                'titleid': titleid,
+                                'cover_url': cover_url,
+                                'cover_type': cover.get('CoverType', 'unknown'),
+                                'status': 'pending',
+                                'metadata': cover
+                            })
                             logger.info(f"Stored cover metadata: {cover_id}")
+        
+        # Batch insert covers
+        if covers_batch:
+            self.db.batch_insert_covers(covers_batch)
         
         # Fetch and store updates metadata only
         updates_data = self.fetch_json_data(self.config.api_endpoints['updates'], titleid)
@@ -308,14 +392,19 @@ class UnityScraper:
                                     if tuid:
                                         # Store update metadata WITHOUT downloading
                                         update_url = f"{self.config.base_url}/Resources/Lib/TitleUpdate.php?tuid={tuid}"
-                                        self.db.add_title_update(
-                                            titleid,
-                                            media_id=str(media_id),
-                                            version=str(version),
-                                            download_url=update_url,
-                                            metadata=update
-                                        )
+                                        updates_batch.append({
+                                            'titleid': titleid,
+                                            'media_id': str(media_id),
+                                            'version': str(version),
+                                            'download_url': update_url,
+                                            'status': 'pending',
+                                            'metadata': update
+                                        })
                                         logger.info(f"Stored update metadata: {tuid} v{version}")
+        
+        # Batch insert updates
+        if updates_batch:
+            self.db.batch_insert_updates(updates_batch)
         
         # Update database with scrape info
         self.db.update_scrape_info(titleid)
@@ -371,13 +460,33 @@ class UnityScraper:
                     filename = f"cover_{cover_id}.jpg"
                     cover_path = covers_dir / filename
                     
-                    try:
-                        self.download_file(cover_url, cover_path)
-                        download_status = 'downloaded'
-                    except Exception as e:
-                        logger.error(f"Failed to download cover {cover_id}: {e}")
-                        download_status = 'failed'
-                        cover_path = None
+                    # Check for duplicates (feature 8)
+                    if cover_path.exists():
+                        existing_hash = self.downloader.calculate_checksum(cover_path)
+                        # Download to temp, check hash, compare
+                        temp_path = cover_path.parent / f"{cover_path.name}.tmp"
+                        self.download_file(cover_url, temp_path)
+                        if temp_path.exists():
+                            new_hash = self.downloader.calculate_checksum(temp_path)
+                            if existing_hash == new_hash:
+                                logger.info(f"Cover {cover_id} already exists (duplicate)")
+                                temp_path.unlink()
+                                download_status = 'downloaded'
+                                cover_path = cover_path  # Keep existing
+                            else:
+                                temp_path.rename(cover_path)
+                                download_status = 'downloaded'
+                        else:
+                            download_status = 'failed'
+                    else:
+                        success = self.download_file(cover_url, cover_path)
+                        download_status = 'downloaded' if success else 'failed'
+                    
+                    # Verify checksum if enabled (feature 5)
+                    if download_status == 'downloaded' and self.config.verify_checksums:
+                        if not cover_path.exists():
+                            download_status = 'failed'
+                            logger.error(f"Downloaded file missing: {cover_path}")
                     
                     # Store cover metadata in database with status
                     self.db.add_cover(
@@ -415,13 +524,32 @@ class UnityScraper:
                             filename = f"update_{tuid}.bin"
                             file_path = update_dir / filename
                             
-                            try:
-                                self.download_file(update_url, file_path)
-                                download_status = 'downloaded'
-                            except Exception as e:
-                                logger.error(f"Failed to download update {tuid}: {e}")
-                                download_status = 'failed'
-                                file_path = None
+                            # Check for duplicates (feature 8)
+                            if file_path.exists():
+                                existing_hash = self.downloader.calculate_checksum(file_path)
+                                temp_path = file_path.parent / f"{file_path.name}.tmp"
+                                self.download_file(update_url, temp_path)
+                                if temp_path.exists():
+                                    new_hash = self.downloader.calculate_checksum(temp_path)
+                                    if existing_hash == new_hash:
+                                        logger.info(f"Update {tuid} already exists (duplicate)")
+                                        temp_path.unlink()
+                                        download_status = 'downloaded'
+                                        file_path = file_path  # Keep existing
+                                    else:
+                                        temp_path.rename(file_path)
+                                        download_status = 'downloaded'
+                                else:
+                                    download_status = 'failed'
+                            else:
+                                success = self.download_file(update_url, file_path)
+                                download_status = 'downloaded' if success else 'failed'
+                            
+                            # Verify checksum if enabled (feature 5)
+                            if download_status == 'downloaded' and self.config.verify_checksums:
+                                if not file_path.exists():
+                                    download_status = 'failed'
+                                    logger.error(f"Downloaded file missing: {file_path}")
                             
                             # Store update metadata in database with status
                             self.db.add_title_update(
@@ -453,6 +581,60 @@ class UnityScraper:
                     future.result()
                 except Exception as e:
                     logger.error(f"Error processing {titleid}: {e}")
+    
+    def retry_failed_downloads(self, titleid: Optional[str] = None):
+        """Retry all failed downloads (feature 2)"""
+        logger.info(f"{'='*60}")
+        logger.info(f"Retrying failed downloads{f' for {titleid}' if titleid else ''}")
+        logger.info(f"{'='*60}")
+        
+        failed_items = self.db.get_failed_items(titleid)
+        
+        if not failed_items:
+            logger.info("No failed items to retry")
+            return
+        
+        logger.info(f"Found {len(failed_items)} failed items to retry")
+        
+        for item in failed_items:
+            try:
+                if item['type'] == 'cover':
+                    success = self.download_file(item['url'], Path(item['url'].split('/')[-1]))
+                    if success:
+                        self.db.mark_for_retry('cover', item['id'])
+                        logger.info(f"Retried cover {item['id']}: SUCCESS")
+                    else:
+                        logger.warning(f"Retried cover {item['id']}: FAILED")
+                        
+                elif item['type'] == 'update':
+                    success = self.download_file(item['url'], Path(item['url'].split('/')[-1]))
+                    if success:
+                        self.db.mark_for_retry('update', item['id'])
+                        logger.info(f"Retried update {item['id']}: SUCCESS")
+                    else:
+                        logger.warning(f"Retried update {item['id']}: FAILED")
+            except Exception as e:
+                logger.error(f"Error retrying {item['type']} {item['id']}: {e}")
+        
+        logger.info("Retry operation completed")
+    
+    def export_database(self, format: str = 'json', output_file: str = None):
+        """Export database to JSON or CSV (feature 4)"""
+        if not output_file:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_file = f"export_{timestamp}.{format}"
+        
+        logger.info(f"Exporting database to {format.upper()}: {output_file}")
+        
+        if format == 'json':
+            self.db.export_to_json(output_file)
+        elif format == 'csv':
+            self.db.export_to_csv(output_file)
+        else:
+            logger.error(f"Unknown export format: {format}")
+            return
+        
+        logger.info(f"Export completed: {output_file}")
 
 
 def main():
@@ -507,6 +689,65 @@ def main():
         action='store_true',
         help='Only collect metadata without downloading files'
     )
+    parser.add_argument(
+        '--retry-failed',
+        action='store_true',
+        help='Retry all failed downloads'
+    )
+    parser.add_argument(
+        '--estimate-size',
+        action='store_true',
+        help='Estimate download size before downloading'
+    )
+    parser.add_argument(
+        '--verify-checksums',
+        action='store_true',
+        help='Verify checksums after download'
+    )
+    parser.add_argument(
+        '--bandwidth-limit',
+        type=int,
+        default=0,
+        help='Bandwidth limit in KB/s (0 = unlimited)'
+    )
+    parser.add_argument(
+        '--export',
+        type=str,
+        choices=['json', 'csv'],
+        help='Export database to JSON or CSV'
+    )
+    parser.add_argument(
+        '--export-file',
+        type=str,
+        help='Export output file path'
+    )
+    parser.add_argument(
+        '--cleanup',
+        action='store_true',
+        help='Clean up old download history'
+    )
+    parser.add_argument(
+        '--cleanup-days',
+        type=int,
+        default=90,
+        help='Days of history to keep (default: 90)'
+    )
+    parser.add_argument(
+        '--dry-run',
+        action='store_true',
+        help='Simulate downloads without saving files'
+    )
+    parser.add_argument(
+        '--refresh-metadata',
+        type=str,
+        help='Refresh metadata for specific TitleIDs'
+    )
+    parser.add_argument(
+        '--refresh-interval',
+        type=int,
+        default=0,
+        help='Days between automatic refreshes (0 = disabled)'
+    )
     
     args = parser.parse_args()
     
@@ -526,17 +767,46 @@ def main():
     if args.force_http:
         config.use_https = False
         config.base_url = config.http_fallback_url
+    config.verify_checksums = args.verify_checksums
+    config.bandwidth_limit = args.bandwidth_limit
+    config.dry_run = args.dry_run
+    config.refresh_interval_days = args.refresh_interval
     
     # Save config if requested
     if args.save_config:
         config.save_to_file()
         logger.info("Configuration saved")
     
+    # Initialize scraper
+    scraper = UnityScraper(config)
+    
+    # Handle export
+    if args.export:
+        scraper.export_database(args.export, args.export_file)
+        sys.exit(0)
+    
+    # Handle cleanup
+    if args.cleanup:
+        deleted = scraper.db.cleanup_old_history(args.cleanup_days)
+        logger.info(f"Cleaned up {deleted} old history entries")
+        scraper.db.vacuum()
+        sys.exit(0)
+    
+    # Handle retry failed
+    if args.retry_failed:
+        scraper.retry_failed_downloads()
+        sys.exit(0)
+    
     # Get TitleIDs
     titleids = []
     metadata_only = args.metadata_only
     
-    if args.titleids:
+    if args.refresh_metadata:
+        # Refresh metadata for specific TitleIDs
+        titleids = [tid.strip() for tid in args.refresh_metadata.split(',')]
+        metadata_only = True
+        logger.info(f"Refreshing metadata for {len(titleids)} TitleIDs")
+    elif args.titleids:
         for arg in args.titleids:
             titleids.extend([tid.strip() for tid in arg.split(',')])
     else:
@@ -557,10 +827,20 @@ def main():
     
     # Run scraper
     try:
-        scraper = UnityScraper(config)
+        if args.estimate_size:
+            # Estimate sizes
+            logger.info("Estimating download sizes...")
+            for titleid in titleids:
+                estimate = scraper.get_download_size_estimate(titleid)
+                total_mb = estimate['total_bytes'] / (1024 * 1024)
+                covers_mb = estimate['covers_bytes'] / (1024 * 1024)
+                updates_mb = estimate['updates_bytes'] / (1024 * 1024)
+                logger.info(f"{titleid}: {total_mb:.2f}MB total "
+                           f"(Covers: {covers_mb:.2f}MB, Updates: {updates_mb:.2f}MB)")
+            sys.exit(0)
         
         if metadata_only:
-            # Collect metadata only (for JSON.txt or --metadata-only flag)
+            # Collect metadata only
             logger.info(f"Collecting metadata for {len(titleids)} TitleIDs...")
             with ThreadPoolExecutor(max_workers=config.workers) as executor:
                 futures = {executor.submit(scraper.collect_metadata, tid): tid for tid in titleids}

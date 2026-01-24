@@ -4,7 +4,7 @@ Modern Tkinter interface with improved features
 """
 
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, scrolledtext
+from tkinter import ttk, filedialog, messagebox, scrolledtext, simpledialog
 import threading
 import queue
 import logging
@@ -164,9 +164,21 @@ class UnityScraperGUI:
         )
         retries_spinbox.grid(row=1, column=3, sticky=tk.W, padx=5)
         
+        # Bandwidth limit
+        ttk.Label(settings_frame, text="Bandwidth (KB/s):").grid(row=2, column=0, sticky=tk.W, padx=5)
+        self.bandwidth_var = tk.IntVar(value=self.config.bandwidth_limit)
+        bandwidth_spinbox = ttk.Spinbox(
+            settings_frame,
+            from_=0,
+            to=10000,
+            textvariable=self.bandwidth_var,
+            width=10
+        )
+        bandwidth_spinbox.grid(row=2, column=1, sticky=tk.W, padx=5)
+        
         # Protocol options
         protocol_frame = ttk.Frame(settings_frame)
-        protocol_frame.grid(row=2, column=0, columnspan=4, sticky=tk.W, pady=5)
+        protocol_frame.grid(row=3, column=0, columnspan=4, sticky=tk.W, pady=5)
         
         self.https_var = tk.BooleanVar(value=self.config.use_https)
         https_check = ttk.Checkbutton(
@@ -176,9 +188,25 @@ class UnityScraperGUI:
         )
         https_check.grid(row=0, column=0, sticky=tk.W)
         
+        self.verify_checksum_var = tk.BooleanVar(value=self.config.verify_checksums)
+        checksum_check = ttk.Checkbutton(
+            protocol_frame,
+            text="Verify checksums",
+            variable=self.verify_checksum_var
+        )
+        checksum_check.grid(row=0, column=1, sticky=tk.W, padx=20)
+        
+        self.dry_run_var = tk.BooleanVar(value=self.config.dry_run)
+        dry_run_check = ttk.Checkbutton(
+            protocol_frame,
+            text="Dry run (no downloads)",
+            variable=self.dry_run_var
+        )
+        dry_run_check.grid(row=0, column=2, sticky=tk.W, padx=20)
+        
         # Connection status
         self.status_label = ttk.Label(settings_frame, text="Not connected", style='Subtitle.TLabel')
-        self.status_label.grid(row=3, column=0, columnspan=4, sticky=tk.W, pady=5)
+        self.status_label.grid(row=4, column=0, columnspan=4, sticky=tk.W, pady=5)
         
         # Control buttons
         button_frame = ttk.Frame(main_frame)
@@ -209,13 +237,21 @@ class UnityScraperGUI:
         )
         test_btn.grid(row=0, column=2, padx=5)
         
+        retry_btn = ttk.Button(
+            button_frame,
+            text="Retry Failed",
+            command=self.retry_failed,
+            width=15
+        )
+        retry_btn.grid(row=0, column=3, padx=5)
+        
         config_btn = ttk.Button(
             button_frame, 
             text="Save Config", 
             command=self.save_config,
             width=15
         )
-        config_btn.grid(row=0, column=3, padx=5)
+        config_btn.grid(row=1, column=0, padx=5)
         
         load_btn = ttk.Button(
             button_frame, 
@@ -223,7 +259,23 @@ class UnityScraperGUI:
             command=self.load_config,
             width=15
         )
-        load_btn.grid(row=0, column=4, padx=5)
+        load_btn.grid(row=1, column=1, padx=5)
+        
+        export_btn = ttk.Button(
+            button_frame,
+            text="Export DB",
+            command=self.export_database,
+            width=15
+        )
+        export_btn.grid(row=1, column=2, padx=5)
+        
+        stats_btn = ttk.Button(
+            button_frame,
+            text="Show Stats",
+            command=self.show_statistics,
+            width=15
+        )
+        stats_btn.grid(row=1, column=3, padx=5)
         
         # Progress bar
         self.progress = ttk.Progressbar(main_frame, mode='indeterminate')
@@ -295,6 +347,9 @@ class UnityScraperGUI:
         self.config.timeout = self.timeout_var.get()
         self.config.max_retries = self.retries_var.get()
         self.config.use_https = self.https_var.get()
+        self.config.bandwidth_limit = self.bandwidth_var.get()
+        self.config.verify_checksums = self.verify_checksum_var.get()
+        self.config.dry_run = self.dry_run_var.get()
         
         if not self.config.use_https:
             self.config.base_url = self.config.http_fallback_url
@@ -366,6 +421,103 @@ class UnityScraperGUI:
     def clear_log(self):
         """Clear log output"""
         self.log_text.delete(1.0, tk.END)
+    
+    def retry_failed(self):
+        """Retry all failed downloads"""
+        self.update_config_from_gui()
+        
+        def retry():
+            try:
+                self.scraper = UnityScraper(self.config)
+                self.scraper.retry_failed_downloads()
+                logging.info("Failed downloads retry completed!")
+                self.root.after(0, lambda: messagebox.showinfo(
+                    "Success", 
+                    "Failed downloads retry completed!"
+                ))
+            except Exception as e:
+                logging.error(f"Retry error: {e}")
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Error", 
+                    f"Retry failed: {str(e)}"
+                ))
+        
+        thread = threading.Thread(target=retry, daemon=True)
+        thread.start()
+    
+    def export_database(self):
+        """Export database to JSON or CSV"""
+        export_format = tk.simpledialog.askstring(
+            "Export Format",
+            "Enter format (json or csv):",
+            initialvalue="json"
+        )
+        
+        if not export_format:
+            return
+        
+        if export_format.lower() not in ['json', 'csv']:
+            messagebox.showerror("Invalid Format", "Please enter 'json' or 'csv'")
+            return
+        
+        self.update_config_from_gui()
+        
+        def export():
+            try:
+                self.scraper = UnityScraper(self.config)
+                self.scraper.export_database(export_format.lower())
+                logging.info(f"Database exported to {export_format.upper()}")
+                self.root.after(0, lambda: messagebox.showinfo(
+                    "Success", 
+                    f"Database exported successfully!"
+                ))
+            except Exception as e:
+                logging.error(f"Export error: {e}")
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Error", 
+                    f"Export failed: {str(e)}"
+                ))
+        
+        thread = threading.Thread(target=export, daemon=True)
+        thread.start()
+    
+    def show_statistics(self):
+        """Show database statistics in a new window"""
+        self.update_config_from_gui()
+        
+        def get_stats():
+            try:
+                from database import DatabaseManager
+                db = DatabaseManager()
+                stats = db.get_statistics()
+                
+                # Display in messagebox
+                stats_text = f"""
+Database Statistics:
+
+Total TitleIDs: {stats.get('total_titleids', 0)}
+Total Covers: {stats.get('total_covers', 0)}
+Total Updates: {stats.get('total_updates', 0)}
+Downloads Last Week: {stats.get('downloads_last_week', 0)}
+
+Most Scraped:
+"""
+                for item in stats.get('most_scraped', [])[:5]:
+                    stats_text += f"\n  {item.get('titleid')} - {item.get('name', 'Unknown')} ({item.get('scrape_count', 0)}x)"
+                
+                self.root.after(0, lambda: messagebox.showinfo(
+                    "Database Statistics", 
+                    stats_text
+                ))
+            except Exception as e:
+                logging.error(f"Stats error: {e}")
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Error", 
+                    f"Failed to get statistics: {str(e)}"
+                ))
+        
+        thread = threading.Thread(target=get_stats, daemon=True)
+        thread.start()
     
     def start_download(self):
         """Start download process"""

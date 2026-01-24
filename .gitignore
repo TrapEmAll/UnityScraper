@@ -5,3 +5,41 @@
 /GUI.zip
 /.vs
 /__pycache__
+
+# Documentation and Reports (not part of core codebase)
+COMPLETION_REPORT.md
+FEATURES_IMPLEMENTED.md
+IMPLEMENTATION_DETAILS.md
+IMPLEMENTATION_SUMMARY.md
+QUICKREF.md
+QUICKSTART_V2.md
+INDEX.md
+.github/copilot-instructions.md
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+*.log
+
+# Database and local files
+*.db
+*.sqlite
+unityscraper.log
+config.json
+unityscrape/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

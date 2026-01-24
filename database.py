@@ -136,8 +136,8 @@ class DatabaseManager:
             
             logger.info(f"Database initialized at {self.db_path}")
     
-    def add_titleid(self, titleid: str, name: str = None, 
-                    publisher: str = None, metadata: Dict = None) -> bool:
+    def add_titleid(self, titleid: str, name: Optional[str] = None, 
+                    publisher: Optional[str] = None, metadata: Optional[Dict] = None) -> bool:
         """Add or update a TitleID entry"""
         try:
             with self.get_connection() as conn:
@@ -164,8 +164,8 @@ class DatabaseManager:
             logger.error(f"Failed to add TitleID {titleid}: {e}")
             return False
     
-    def _update_search_index(self, conn, titleid: str, name: str = None, 
-                            publisher: str = None, metadata: Dict = None):
+    def _update_search_index(self, conn, titleid: str, name: Optional[str] = None, 
+                            publisher: Optional[str] = None, metadata: Optional[Dict] = None):
         """Update full-text search index"""
         search_parts = [titleid]
         if name:
@@ -202,9 +202,9 @@ class DatabaseManager:
             return False
     
     def add_title_update(self, titleid: str, media_id: str, version: str,
-                        download_url: str, file_path: str = None,
-                        file_size: int = None, status: str = 'pending',
-                        metadata: Dict = None) -> bool:
+                        download_url: str, file_path: Optional[str] = None,
+                        file_size: Optional[int] = None, status: str = 'pending',
+                        metadata: Optional[Dict] = None) -> bool:
         """Add a title update entry"""
         try:
             with self.get_connection() as conn:
@@ -232,10 +232,10 @@ class DatabaseManager:
             logger.error(f"Failed to add title update: {e}")
             return False
     
-    def add_cover(self, titleid: str, cover_url: str, file_path: str = None,
-                  cover_type: str = None, resolution: str = None,
-                  file_size: int = None, status: str = 'pending', 
-                  metadata: Dict = None) -> bool:
+    def add_cover(self, titleid: str, cover_url: str, file_path: Optional[str] = None,
+                  cover_type: Optional[str] = None, resolution: Optional[str] = None,
+                  file_size: Optional[int] = None, status: str = 'pending', 
+                  metadata: Optional[Dict] = None) -> bool:
         """Add a cover entry"""
         try:
             with self.get_connection() as conn:
@@ -259,9 +259,9 @@ class DatabaseManager:
             return False
     
     def add_download_history(self, titleid: str, item_type: str, 
-                            status: str, item_id: str = None,
-                            error_message: str = None, 
-                            duration: float = None) -> bool:
+                            status: str, item_id: Optional[str] = None,
+                            error_message: Optional[str] = None, 
+                            duration: Optional[float] = None) -> bool:
         """Add download history entry"""
         try:
             with self.get_connection() as conn:
@@ -333,22 +333,114 @@ class DatabaseManager:
             logger.error(f"Search failed: {e}")
             return []
     
-    def get_all_titleids(self, limit: int = None) -> List[str]:
-        """Get all TitleIDs in database"""
+    def get_failed_items(self, titleid: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get all items with failed download status"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 
-                query = 'SELECT titleid FROM titleids ORDER BY last_scraped DESC'
-                if limit:
-                    query += f' LIMIT {limit}'
+                # Get failed covers
+                if titleid:
+                    cursor.execute('''
+                        SELECT "cover" as type, titleid, id, cover_url as url 
+                        FROM covers 
+                        WHERE status = "failed" AND titleid = ?
+                    ''', (titleid,))
+                else:
+                    cursor.execute('''
+                        SELECT "cover" as type, titleid, id, cover_url as url 
+                        FROM covers 
+                        WHERE status = "failed"
+                    ''')
+                covers = [dict(row) for row in cursor.fetchall()]
                 
-                cursor.execute(query)
-                return [row['titleid'] for row in cursor.fetchall()]
+                # Get failed updates
+                if titleid:
+                    cursor.execute('''
+                        SELECT "update" as type, titleid, id, download_url as url 
+                        FROM title_updates 
+                        WHERE status = "failed" AND titleid = ?
+                    ''', (titleid,))
+                else:
+                    cursor.execute('''
+                        SELECT "update" as type, titleid, id, download_url as url 
+                        FROM title_updates 
+                        WHERE status = "failed"
+                    ''')
+                updates = [dict(row) for row in cursor.fetchall()]
+                
+                return covers + updates
                 
         except Exception as e:
-            logger.error(f"Failed to get titleids: {e}")
+            logger.error(f"Failed to get failed items: {e}")
             return []
+    
+    def mark_for_retry(self, item_type: str, item_id: int) -> bool:
+        """Mark a failed item for retry by resetting status to pending"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                if item_type == 'cover':
+                    cursor.execute('UPDATE covers SET status = "pending" WHERE id = ?', (item_id,))
+                elif item_type == 'update':
+                    cursor.execute('UPDATE title_updates SET status = "pending" WHERE id = ?', (item_id,))
+                
+                logger.info(f"Marked {item_type} {item_id} for retry")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Failed to mark for retry: {e}")
+            return False
+    
+    def batch_insert_covers(self, covers_list: List[Dict]) -> int:
+        """Batch insert multiple covers for faster metadata collection"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                inserted = 0
+                
+                for cover in covers_list:
+                    cursor.execute('''
+                        INSERT INTO covers 
+                        (titleid, cover_url, cover_type, status, metadata)
+                        VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT DO NOTHING
+                    ''', (cover['titleid'], cover['cover_url'], cover.get('cover_type'),
+                          cover.get('status', 'pending'), json.dumps(cover.get('metadata'))))
+                    inserted += cursor.rowcount
+                
+                logger.debug(f"Batch inserted {inserted} covers")
+                return inserted
+                
+        except Exception as e:
+            logger.error(f"Batch insert failed: {e}")
+            return 0
+    
+    def batch_insert_updates(self, updates_list: List[Dict]) -> int:
+        """Batch insert multiple updates for faster metadata collection"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                inserted = 0
+                
+                for update in updates_list:
+                    cursor.execute('''
+                        INSERT INTO title_updates
+                        (titleid, media_id, version, download_url, status, metadata)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        ON CONFLICT DO NOTHING
+                    ''', (update['titleid'], update.get('media_id'), update.get('version'),
+                          update.get('download_url'), update.get('status', 'pending'),
+                          json.dumps(update.get('metadata'))))
+                    inserted += cursor.rowcount
+                
+                logger.debug(f"Batch inserted {inserted} updates")
+                return inserted
+                
+        except Exception as e:
+            logger.error(f"Batch insert failed: {e}")
+            return 0
     
     def get_statistics(self) -> Dict[str, Any]:
         """Get database statistics"""
@@ -446,6 +538,37 @@ class DatabaseManager:
                 
         except Exception as e:
             logger.error(f"Export failed: {e}")
+            return False
+    
+    def export_to_csv(self, output_file: str) -> bool:
+        """Export metadata to CSV format"""
+        import csv
+        
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                with open(output_file, 'w', newline='') as csvfile:
+                    # Export covers
+                    cursor.execute('SELECT * FROM covers')
+                    writer = csv.writer(csvfile)
+                    writer.writerow(['Type', 'TitleID', 'Cover URL', 'File Path', 'Status', 'Download Date'])
+                    
+                    for row in cursor.fetchall():
+                        writer.writerow(['cover', row['titleid'], row['cover_url'], 
+                                       row['file_path'], row['status'], row['download_date']])
+                    
+                    # Export updates
+                    cursor.execute('SELECT * FROM title_updates')
+                    for row in cursor.fetchall():
+                        writer.writerow(['update', row['titleid'], row['download_url'],
+                                       row['file_path'], row['status'], row['download_date']])
+                
+                logger.info(f"Exported CSV to {output_file}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"CSV export failed: {e}")
             return False
     
     def vacuum(self):

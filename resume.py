@@ -64,10 +64,12 @@ class DownloadProgress:
 class ResumableDownloader:
     """Handles resumable downloads with progress tracking and checksums"""
     
-    def __init__(self, session: requests.Session, timeout: int = 30):
+    def __init__(self, session: requests.Session, timeout: int = 30, bandwidth_limit: int = 0):
         self.session = session
         self.timeout = timeout
         self.chunk_size = 8192
+        self.bandwidth_limit = bandwidth_limit  # KB/s, 0 = unlimited
+        self.last_chunk_time = 0
     
     def supports_resume(self, url: str) -> bool:
         """Check if server supports resume (Accept-Ranges header)"""
@@ -87,6 +89,20 @@ class ResumableDownloader:
         except Exception as e:
             logger.error(f"Could not get remote file size: {e}")
             return None
+    
+    def apply_bandwidth_limit(self, chunk_size: int):
+        """Apply bandwidth throttling if configured"""
+        if self.bandwidth_limit <= 0:
+            return
+        
+        # Calculate sleep time: chunk_size (bytes) / bandwidth_limit (KB/s)
+        target_time = chunk_size / (self.bandwidth_limit * 1024)
+        elapsed = time.time() - self.last_chunk_time
+        
+        if elapsed < target_time:
+            time.sleep(target_time - elapsed)
+        
+        self.last_chunk_time = time.time()
     
     def calculate_checksum(self, filepath: Path, algorithm: str = 'sha256') -> str:
         """Calculate file checksum"""
@@ -262,6 +278,7 @@ class ResumableDownloader:
                     if chunk:
                         f.write(chunk)
                         progress.update(len(chunk))
+                        self.apply_bandwidth_limit(len(chunk))
                         
                         # Call progress callback
                         if progress_callback and time.time() - progress.last_update > 0.5:
