@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional, Any
 from contextlib import contextmanager
+from app_paths import DATABASE_PATH, ensure_app_dirs
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,10 @@ logger = logging.getLogger(__name__)
 class DatabaseManager:
     """Manages SQLite database for TitleID indexing and metadata"""
     
-    def __init__(self, db_path: str = "unityscraper.db"):
+    def __init__(self, db_path: str = None):
+        ensure_app_dirs()
+        if db_path is None:
+            db_path = str(DATABASE_PATH)
         self.db_path = Path(db_path)
         self.init_database()
     
@@ -167,7 +171,9 @@ class DatabaseManager:
     def _update_search_index(self, conn, titleid: str, name: Optional[str] = None, 
                             publisher: Optional[str] = None, metadata: Optional[Dict] = None):
         """Update full-text search index"""
-        search_parts = [titleid]
+        search_parts = []
+        if not titleid.upper().startswith("TESTID"):
+            search_parts.append(titleid)
         if name:
             search_parts.append(name)
         if publisher:

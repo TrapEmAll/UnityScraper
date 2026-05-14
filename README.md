@@ -32,6 +32,35 @@ Tkinter is included with standard Python installs.
 
 ## Quick Start
 
+### Windows Desktop App
+
+Run the desktop app directly:
+
+```bat
+Run-UnityScraper.bat
+```
+
+Or build a standalone Windows executable:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build_windows.ps1
+```
+
+The built app is written to:
+
+```text
+dist\UnityScraper.exe
+```
+
+All user data is stored locally under:
+
+```text
+%LOCALAPPDATA%\UnityScraper
+```
+
+That folder contains the SQLite database, editable `JSON.txt` TitleID list,
+saved config, logs, and downloaded archive files.
+
 ### Option 1: Auto-Load from JSON.txt
 
 Place a `JSON.txt` file in the same directory with comma-separated TitleIDs:

@@ -36,6 +36,9 @@ config.json
 unityscrape/
 download_queue.json
 
+# Build intermediates
+build/
+
 # Temporary and partial files
 *.tmp
 *.partial

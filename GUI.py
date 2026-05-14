@@ -15,6 +15,14 @@ from datetime import datetime, timedelta
 
 # Import the main scraper (assumes main.py is in same directory)
 try:
+    from app_paths import (
+        CONFIG_PATH,
+        GUI_LOG_PATH,
+        TITLEIDS_PATH,
+        describe_storage,
+        ensure_app_dirs,
+        ensure_user_titleids_file,
+    )
     from main import UnityScraper, Config
     from i18n import init_translator, get_translator, t
     from updater import VersionChecker
@@ -42,12 +50,14 @@ class UnityScraperGUI:
         self.root.title("UnityScraper - Enhanced Edition")
         self.root.geometry("1100x800")
         self.root.resizable(True, True)
+        ensure_app_dirs()
+        ensure_user_titleids_file()
         
         # Initialize i18n
         init_translator('en')
         
         # State variables
-        self.config = Config()
+        self.config = Config(str(CONFIG_PATH) if CONFIG_PATH.exists() else None)
         self.scraper: Optional[UnityScraper] = None
         self.is_running = False
         self.stop_requested = False
@@ -102,7 +112,7 @@ class UnityScraperGUI:
         ttk.Label(main_frame, text="TitleIDs:").grid(row=2, column=0, sticky=tk.W, pady=5)
         self.titleids_entry = ttk.Entry(main_frame, width=50)
         self.titleids_entry.grid(row=2, column=1, sticky=(tk.W, tk.E), pady=5, padx=5)
-        self.titleids_entry.insert(0, "555308C5")
+        self.titleids_entry.insert(0, self.load_saved_titleids_preview())
         
         ttk.Label(
             main_frame, 
@@ -310,6 +320,14 @@ class UnityScraperGUI:
             width=15
         )
         queue_btn.grid(row=2, column=2, padx=5, pady=5)
+
+        metadata_btn = ttk.Button(
+            button_frame,
+            text="Collect Metadata",
+            command=self.collect_metadata,
+            width=15
+        )
+        metadata_btn.grid(row=3, column=0, padx=5, pady=5)
         
         language_label = ttk.Label(button_frame, text="Language:")
         language_label.grid(row=2, column=3, sticky=tk.W, padx=5)
@@ -402,9 +420,25 @@ class UnityScraperGUI:
         logger.addHandler(queue_handler)
         
         # Also add file handler
-        file_handler = logging.FileHandler('unityscraper_gui.log')
+        file_handler = logging.FileHandler(GUI_LOG_PATH)
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
+
+        logger.info("UnityScraper desktop storage initialized")
+        for line in describe_storage().splitlines():
+            logger.info(line)
+
+    def load_saved_titleids_preview(self):
+        """Load a short editable TitleID preview from the user's local config."""
+        try:
+            titleids_path = ensure_user_titleids_file()
+            content = titleids_path.read_text(encoding="utf-8").strip()
+            if content:
+                titleids = [tid.strip() for tid in content.split(",") if tid.strip()]
+                return ",".join(titleids[:10])
+        except Exception as e:
+            logging.warning(f"Unable to load saved TitleIDs from {TITLEIDS_PATH}: {e}")
+        return "555308C5"
     
     def process_log_queue(self):
         """Process log messages from queue and display in GUI"""
@@ -469,7 +503,8 @@ class UnityScraperGUI:
         filename = filedialog.asksaveasfilename(
             defaultextension=".json",
             filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
-            initialfile="config.json"
+            initialdir=str(CONFIG_PATH.parent),
+            initialfile=CONFIG_PATH.name
         )
         
         if filename:
@@ -545,13 +580,26 @@ class UnityScraperGUI:
         if export_format.lower() not in ['json', 'csv']:
             messagebox.showerror("Invalid Format", "Please enter 'json' or 'csv'")
             return
+
+        export_format = export_format.lower()
+        default_name = f"unityscraper_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{export_format}"
+        output_file = filedialog.asksaveasfilename(
+            defaultextension=f".{export_format}",
+            filetypes=[
+                (f"{export_format.upper()} files", f"*.{export_format}"),
+                ("All files", "*.*"),
+            ],
+            initialfile=default_name,
+        )
+        if not output_file:
+            return
         
         self.update_config_from_gui()
         
         def export():
             try:
                 self.scraper = UnityScraper(self.config)
-                self.scraper.export_database(export_format.lower())
+                self.scraper.export_database(export_format, output_file)
                 logging.info(f"Database exported to {export_format.upper()}")
                 self.root.after(0, lambda: messagebox.showinfo(
                     "Success", 
@@ -727,40 +775,23 @@ Failed: {queue_stats['failed']}
             from database import DatabaseManager
             db = DatabaseManager()
             
-            # Get all items
             all_items = []
-            
-            # Get covers and updates
-            for titleid_info in db.search_titleids(''):
-                titleid = titleid_info.get('titleid')
-                
-                covers = db.db.execute(
-                    'SELECT * FROM covers WHERE titleid = ?',
-                    (titleid,)
-                ).fetchall() if hasattr(db, 'db') else []
-                
-                updates = db.db.execute(
-                    'SELECT * FROM title_updates WHERE titleid = ?',
-                    (titleid,)
-                ).fetchall() if hasattr(db, 'db') else []
-                
-                for item in covers:
-                    if status_filter == 'all' or item.get('status') == status_filter:
-                        all_items.append({
-                            'type': 'cover',
-                            'titleid': titleid,
-                            'status': item.get('status'),
-                            'date': item.get('download_date')
-                        })
-                
-                for item in updates:
-                    if status_filter == 'all' or item.get('status') == status_filter:
-                        all_items.append({
-                            'type': 'update',
-                            'titleid': titleid,
-                            'status': item.get('status'),
-                            'date': item.get('download_date')
-                        })
+            with db.get_connection() as conn:
+                cursor = conn.cursor()
+                status_clause = "" if status_filter == "all" else " WHERE status = ?"
+                params = () if status_filter == "all" else (status_filter,)
+
+                cursor.execute(
+                    f'SELECT "cover" as type, titleid, status, download_date as date FROM covers{status_clause}',
+                    params,
+                )
+                all_items.extend(dict(row) for row in cursor.fetchall())
+
+                cursor.execute(
+                    f'SELECT "update" as type, titleid, status, download_date as date FROM title_updates{status_clause}',
+                    params,
+                )
+                all_items.extend(dict(row) for row in cursor.fetchall())
             
             # Apply date filter
             filtered_items = all_items
@@ -798,6 +829,8 @@ Failed: {queue_stats['failed']}
         except Exception as e:
             logging.error(f"Language change error: {e}")
             messagebox.showerror("Error", f"Failed to change language: {str(e)}")
+
+    def start_download(self):
         """Start download process"""
         titleids_input = self.titleids_entry.get().strip()
         if not titleids_input:
@@ -822,6 +855,54 @@ Failed: {queue_stats['failed']}
             daemon=True
         )
         thread.start()
+
+    def collect_metadata(self):
+        """Collect metadata without downloading files."""
+        titleids_input = self.titleids_entry.get().strip()
+        if not titleids_input:
+            messagebox.showwarning("Input Required", "Please enter at least one TitleID")
+            return
+
+        titleids = [tid.strip() for tid in titleids_input.split(',') if tid.strip()]
+        self.update_config_from_gui()
+        self.is_running = True
+        self.stop_requested = False
+        self.start_btn.config(state=tk.DISABLED)
+        self.stop_btn.config(state=tk.NORMAL)
+        self.progress.start(10)
+
+        thread = threading.Thread(
+            target=self.metadata_thread,
+            args=(titleids,),
+            daemon=True,
+        )
+        thread.start()
+
+    def metadata_thread(self, titleids):
+        """Metadata collection thread function."""
+        try:
+            self.scraper = UnityScraper(self.config)
+
+            for titleid in titleids:
+                if self.stop_requested:
+                    logging.info("Metadata collection stopped by user")
+                    break
+                self.scraper.collect_metadata(titleid)
+
+            if not self.stop_requested:
+                logging.info("Metadata collection completed!")
+                self.root.after(0, lambda: messagebox.showinfo(
+                    "Success",
+                    "Metadata collection completed successfully!"
+                ))
+        except Exception as e:
+            logging.error(f"Metadata collection error: {e}")
+            self.root.after(0, lambda: messagebox.showerror(
+                "Error",
+                f"Metadata collection failed: {str(e)}"
+            ))
+        finally:
+            self.root.after(0, self.download_finished)
     
     def download_thread(self, titleids):
         """Download thread function"""

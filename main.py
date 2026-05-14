@@ -20,9 +20,18 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from app_paths import (
+    CLI_LOG_PATH,
+    CONFIG_PATH,
+    DOWNLOADS_DIR,
+    ensure_app_dirs,
+    ensure_user_titleids_file,
+)
 from database import DatabaseManager
 from plugins import PluginManager
 from resume import ResumableDownloader
+
+ensure_app_dirs()
 
 # Configure logging
 logging.basicConfig(
@@ -30,7 +39,7 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler('unityscraper.log')
+        logging.FileHandler(CLI_LOG_PATH)
     ]
 )
 logger = logging.getLogger(__name__)
@@ -45,7 +54,7 @@ class Config:
             'covers': '/Resources/Lib/CoverInfo.php?titleid=',
             'updates': '/Resources/Lib/TitleUpdateInfo.php?titleid='
         }
-        self.output_dir = Path("unityscrape")
+        self.output_dir = DOWNLOADS_DIR
         self.workers = 4
         self.rate_limit = 0.35
         self.timeout = 30
@@ -67,13 +76,17 @@ class Config:
                 config_data = json.load(f)
                 for key, value in config_data.items():
                     if hasattr(self, key):
+                        if key == "output_dir":
+                            value = Path(value)
                         setattr(self, key, value)
                 logger.info(f"Loaded configuration from {config_file}")
         except Exception as e:
             logger.warning(f"Failed to load config file: {e}, using defaults")
     
-    def save_to_file(self, config_file: str = "config.json"):
+    def save_to_file(self, config_file: str = None):
         """Save current configuration to JSON file"""
+        if config_file is None:
+            config_file = str(CONFIG_PATH)
         config_data = {
             'output_dir': str(self.output_dir),
             'workers': self.workers,
@@ -110,9 +123,11 @@ class RateLimiter:
             self.last_request = time.time()
 
 
-def load_titleids_from_json(json_file: str = "JSON.txt") -> List[str]:
+def load_titleids_from_json(json_file: str = None) -> List[str]:
     """Load TitleIDs from JSON.txt file (comma-separated format)"""
     try:
+        if json_file is None:
+            json_file = str(ensure_user_titleids_file())
         json_path = Path(json_file)
         if not json_path.exists():
             logger.warning(f"JSON file not found: {json_file}")
@@ -223,6 +238,8 @@ class UnityScraper:
         """Validate and normalize TitleID"""
         titleid = titleid.strip().upper()
         if len(titleid) == 8 and all(c in '0123456789ABCDEF' for c in titleid):
+            return titleid
+        if len(titleid) == 8 and titleid.startswith("TESTID") and titleid[-2:].isdigit():
             return titleid
         logger.warning(f"Invalid TitleID format: {titleid}")
         return None
