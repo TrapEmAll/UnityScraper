@@ -22,6 +22,7 @@ try:
         describe_storage,
         ensure_app_dirs,
         ensure_user_titleids_file,
+        resource_path,
     )
     from main import UnityScraper, Config
     from i18n import init_translator, get_translator, t
@@ -52,6 +53,7 @@ class UnityScraperGUI:
         self.root.resizable(True, True)
         ensure_app_dirs()
         ensure_user_titleids_file()
+        self.set_window_icon()
         
         # Initialize i18n
         init_translator('en')
@@ -72,6 +74,18 @@ class UnityScraperGUI:
         
         # Start log processor
         self.process_log_queue()
+
+    def set_window_icon(self):
+        """Apply the bundled UnityScraper icon to the desktop window."""
+        icon_path = resource_path("assets", "UnityScraper.png")
+        if not icon_path.exists():
+            return
+
+        try:
+            self.window_icon = tk.PhotoImage(file=str(icon_path))
+            self.root.iconphoto(True, self.window_icon)
+        except Exception as e:
+            logging.warning(f"Unable to load window icon from {icon_path}: {e}")
     
     def setup_styles(self):
         """Configure ttk styles"""
