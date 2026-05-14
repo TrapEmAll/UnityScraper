@@ -5,7 +5,7 @@ a = Analysis(
     ['desktop_app.py'],
     pathex=[],
     binaries=[],
-    datas=[('JSON.txt', '.')],
+    datas=[('JSON.txt', '.'), ('assets\\UnityScraper.png', 'assets')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -35,4 +35,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=['assets\\UnityScraper.ico'],
 )

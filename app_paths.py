@@ -38,9 +38,16 @@ GUI_LOG_PATH = LOG_DIR / "unityscraper_gui.log"
 
 def app_root() -> Path:
     """Return the folder containing bundled application files."""
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS)
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
+
+
+def resource_path(*parts: str) -> Path:
+    """Return an application resource path in source or PyInstaller builds."""
+    return app_root().joinpath(*parts)
 
 
 def ensure_app_dirs() -> None:
