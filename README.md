@@ -1,3 +1,4 @@
+<img width="1097" height="829" alt="Screenshot 2026-05-13 210717" src="https://github.com/user-attachments/assets/b35b363a-140c-4b93-97fb-e08b0c4fded0" />
 # UnityScraper
 
 **UnityScraper** is a Python tool for archiving **Xbox 360 Title Updates (TUs)** and **custom cover art** from **XboxUnity.net**. It features a two-phase workflow: collect metadata first, then selectively download files through the GUI.
