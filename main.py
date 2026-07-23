@@ -1,6 +1,6 @@
 """
-Enhanced UnityScraper - Main Module with HTTPS Support
-Improved version with better error handling, HTTPS fallback, and configuration
+Enhanced UnityScraper - Main Module
+Improved version with better error handling and configuration
 """
 
 import argparse
@@ -48,8 +48,8 @@ logger = logging.getLogger(__name__)
 class Config:
     """Configuration management with defaults"""
     def __init__(self, config_file: Optional[str] = None):
-        self.base_url = "https://xboxunity.net"  # Try HTTPS first
-        self.http_fallback_url = "http://xboxunity.net"
+        self.base_url = "http://xboxunity.net"
+        self.http_fallback_url = self.base_url
         self.api_endpoints = {
             'covers': '/Resources/Lib/CoverInfo.php?titleid=',
             'updates': '/Resources/Lib/TitleUpdateInfo.php?titleid='
@@ -60,7 +60,7 @@ class Config:
         self.timeout = 30
         self.max_retries = 3
         self.retry_backoff = 2.0
-        self.use_https = True  # Prefer HTTPS
+        self.use_https = False
         self.bandwidth_limit = 0  # KB/s, 0 = unlimited
         self.verify_checksums = False
         self.dry_run = False
@@ -68,6 +68,9 @@ class Config:
         
         if config_file and Path(config_file).exists():
             self.load_from_file(config_file)
+        self.base_url = "http://xboxunity.net"
+        self.http_fallback_url = self.base_url
+        self.use_https = False
     
     def load_from_file(self, config_file: str):
         """Load configuration from JSON file"""
@@ -94,7 +97,7 @@ class Config:
             'timeout': self.timeout,
             'max_retries': self.max_retries,
             'retry_backoff': self.retry_backoff,
-            'use_https': self.use_https,
+            'use_https': False,
             'bandwidth_limit': self.bandwidth_limit,
             'verify_checksums': self.verify_checksums,
             'dry_run': self.dry_run,
@@ -144,7 +147,7 @@ def load_titleids_from_json(json_file: str = None) -> List[str]:
 
 
 class UnityScraper:
-    """Main scraper class with HTTPS support and fallback"""
+    """Main scraper class for XboxUnity's HTTP endpoints."""
     
     def __init__(self, config: Config):
         self.config = config
@@ -173,31 +176,16 @@ class UnityScraper:
         return session
     
     def _test_connection(self):
-        """Test HTTPS/HTTP connectivity and set preferred protocol"""
-        if self.config.use_https:
-            try:
-                logger.info("Testing HTTPS connection...")
-                response = self.session.get(
-                    self.config.base_url,
-                    timeout=10,
-                    allow_redirects=True
-                )
-                response.raise_for_status()
-                logger.info("[OK] HTTPS connection successful")
-                return
-            except Exception as e:
-                logger.warning(f"HTTPS failed: {e}")
-                logger.info("Falling back to HTTP...")
-                self.config.use_https = False
-                self.config.base_url = self.config.http_fallback_url
-        
+        """Test XboxUnity HTTP connectivity."""
+        self.config.use_https = False
+        self.config.base_url = "http://xboxunity.net"
         try:
             response = self.session.get(
                 self.config.base_url,
                 timeout=10
             )
             response.raise_for_status()
-            logger.info("[OK] HTTP connection successful")
+            logger.info("[OK] XboxUnity HTTP connection successful")
         except Exception as e:
             logger.error(f"Failed to connect to XboxUnity: {e}")
             raise ConnectionError("Cannot connect to XboxUnity.net")
@@ -699,7 +687,7 @@ def main():
     parser.add_argument(
         '--force-http',
         action='store_true',
-        help='Force HTTP instead of HTTPS'
+        help='Use XboxUnity HTTP endpoints (always enabled)'
     )
     parser.add_argument(
         '--metadata-only',
@@ -787,6 +775,11 @@ def main():
         default='127.0.0.1',
         help='API server host (default: 127.0.0.1)'
     )
+    parser.add_argument(
+        '--sync-knowledge',
+        action='store_true',
+        help='Import ConsoleMods knowledge data and enrich unknown library metadata'
+    )
     
     args = parser.parse_args()
     
@@ -821,7 +814,7 @@ def main():
         config.rate_limit = args.rate
     if args.force_http:
         config.use_https = False
-        config.base_url = config.http_fallback_url
+        config.base_url = "http://xboxunity.net"
     config.verify_checksums = args.verify_checksums
     config.bandwidth_limit = args.bandwidth_limit
     config.dry_run = args.dry_run
@@ -833,6 +826,17 @@ def main():
         logger.info("Configuration saved")
     
     # Initialize scraper
+    if args.sync_knowledge:
+        try:
+            from knowledge_sync import sync_consolemods_knowledge
+
+            summary = sync_consolemods_knowledge()
+            logger.info("Knowledge sync completed: %s", summary)
+            sys.exit(0)
+        except Exception as e:
+            logger.error(f"Knowledge sync failed: {e}")
+            sys.exit(1)
+
     scraper = UnityScraper(config)
     
     # Handle export
