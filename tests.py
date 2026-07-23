@@ -16,6 +16,12 @@ import requests
 from main import Config, RateLimiter, UnityScraper
 from database import DatabaseManager
 from resume import ResumableDownloader, DownloadProgress, BatchDownloadManager
+from consolemods_adapters import (
+    parse_multi_id_document,
+    parse_title_id_document,
+    short_code_to_titleid,
+)
+from knowledge_base import EntityRecord, Fact, Identifier, KnowledgeRepository
 
 
 class TestConfig(unittest.TestCase):
@@ -34,7 +40,8 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(config.workers, 4)
         self.assertEqual(config.rate_limit, 0.35)
         self.assertEqual(config.timeout, 30)
-        self.assertTrue(config.use_https)
+        self.assertFalse(config.use_https)
+        self.assertEqual(config.base_url, "http://xboxunity.net")
     
     def test_save_and_load_config(self):
         """Test saving and loading configuration"""
@@ -176,6 +183,18 @@ class TestDatabaseManager(unittest.TestCase):
     def test_database_initialization(self):
         """Test database creation"""
         self.assertTrue(self.db_path.exists())
+
+    def test_knowledge_schema_initialization(self):
+        """Test normalized knowledge tables are created."""
+        with self.db.get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE type = 'table' AND name = 'knowledge_facts'
+                """
+            ).fetchone()
+        self.assertIsNotNone(row)
     
     def test_add_titleid(self):
         """Test adding TitleID"""
@@ -261,6 +280,75 @@ class TestDatabaseManager(unittest.TestCase):
             data = json.load(f)
             self.assertIn('titleids', data)
             self.assertIn('statistics', data)
+
+    def test_enrich_unknown_metadata_from_knowledge(self):
+        """Test imported knowledge fills only unknown library fields."""
+        with self.db.get_connection() as conn:
+            repo = KnowledgeRepository(conn)
+            source_id = repo.upsert_source("test", "Test Source")
+            repo.upsert_entity_record(
+                EntityRecord(
+                    "game",
+                    "South Park: The Stick of Truth",
+                    identifiers=(Identifier("titleid", "555308C5"),),
+                    facts=(
+                        Fact("title", "South Park: The Stick of Truth"),
+                        Fact("publisher", "Ubisoft"),
+                    ),
+                ),
+                source_id,
+            )
+
+        self.db.add_titleid("555308C5", name="Unknown", publisher="Unknown Publisher")
+        info = self.db.get_titleid_info("555308C5")
+        self.assertEqual(info["name"], "South Park: The Stick of Truth")
+        self.assertEqual(info["publisher"], "Ubisoft")
+
+        self.db.add_titleid("555308C5", name="User Name", publisher="User Publisher")
+        info = self.db.get_titleid_info("555308C5")
+        self.assertEqual(info["name"], "User Name")
+        self.assertEqual(info["publisher"], "User Publisher")
+
+
+class TestConsoleModsAdapters(unittest.TestCase):
+    """Test ConsoleMods parsing helpers."""
+
+    def test_short_code_to_titleid(self):
+        self.assertEqual(short_code_to_titleid("US-2245"), "555308C5")
+        self.assertEqual(short_code_to_titleid("TT-2215"), "545408A7")
+
+    def test_parse_title_id_document(self):
+        sample = """
+        ## US (5553) --> Ubisoft
+        ### US-2245 (555308C5)
+        South Park: The Stick of Truth
+        ### US-2250 (555308CA)
+        Far Cry 4 [World]
+        ## V3 (5633) --> GameMill entertainment
+        ### V3-2001 (563307D1)
+        Country Dance All Stars
+        """
+        parsed = parse_title_id_document(sample)
+        self.assertEqual(len(parsed), 3)
+        self.assertEqual(parsed[0].titleid, "555308C5")
+        self.assertEqual(parsed[0].publisher, "Ubisoft")
+        self.assertEqual(parsed[1].region, "World")
+
+    def test_parse_multi_id_document(self):
+        sample = """
+        #### BioShock
+        TT-2008 --> BioShock (World)
+        TT-2062 --> BioShock (Germany)
+        TT-2079 --> BioShock (Japan)
+        #### Diablo III
+        9O-2001 --> Diablo III (World)
+        9O-2004 --> Diablo III: Reaper of Souls: Ultimate Evil Edition (World)
+        """
+        parsed = parse_multi_id_document(sample)
+        self.assertEqual(len(parsed), 5)
+        bioshock = [item for item in parsed if item.title == "BioShock"]
+        self.assertEqual(bioshock[0].titleid, "545407D8")
+        self.assertIn("5454080E", bioshock[0].aliases)
 
 
 class TestDownloadProgress(unittest.TestCase):
@@ -434,6 +522,7 @@ def run_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestRateLimiter))
     suite.addTests(loader.loadTestsFromTestCase(TestUnityScraper))
     suite.addTests(loader.loadTestsFromTestCase(TestDatabaseManager))
+    suite.addTests(loader.loadTestsFromTestCase(TestConsoleModsAdapters))
     suite.addTests(loader.loadTestsFromTestCase(TestDownloadProgress))
     suite.addTests(loader.loadTestsFromTestCase(TestResumableDownloader))
     suite.addTests(loader.loadTestsFromTestCase(TestBatchDownloadManager))

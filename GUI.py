@@ -1,5 +1,5 @@
 """
-Enhanced UnityScraper GUI with HTTPS Support
+Enhanced UnityScraper GUI
 Modern Tkinter interface with improved features and i18n support
 """
 
@@ -117,7 +117,7 @@ class UnityScraperGUI:
         
         subtitle_label = ttk.Label(
             main_frame, 
-            text="Download Xbox 360 Title Updates & Covers with HTTPS Support",
+            text="Download Xbox 360 Title Updates & Covers over XboxUnity HTTP endpoints",
             style='Subtitle.TLabel'
         )
         subtitle_label.grid(row=1, column=0, columnspan=3, pady=(0, 15))
@@ -216,8 +216,9 @@ class UnityScraperGUI:
         self.https_var = tk.BooleanVar(value=self.config.use_https)
         https_check = ttk.Checkbutton(
             protocol_frame, 
-            text="Use HTTPS (with HTTP fallback)", 
-            variable=self.https_var
+            text="XboxUnity HTTP endpoints (required)",
+            variable=self.https_var,
+            state=tk.DISABLED
         )
         https_check.grid(row=0, column=0, sticky=tk.W)
         
@@ -480,13 +481,12 @@ class UnityScraperGUI:
         self.config.rate_limit = self.rate_var.get()
         self.config.timeout = self.timeout_var.get()
         self.config.max_retries = self.retries_var.get()
-        self.config.use_https = self.https_var.get()
+        self.config.use_https = False
         self.config.bandwidth_limit = self.bandwidth_var.get()
         self.config.verify_checksums = self.verify_checksum_var.get()
         self.config.dry_run = self.dry_run_var.get()
         
-        if not self.config.use_https:
-            self.config.base_url = self.config.http_fallback_url
+        self.config.base_url = self.config.http_fallback_url
     
     def test_connection(self):
         """Test connection to XboxUnity"""
@@ -496,12 +496,11 @@ class UnityScraperGUI:
             try:
                 self.status_label.config(text="Testing connection...", style='Subtitle.TLabel')
                 scraper = UnityScraper(self.config)
-                protocol = "HTTPS" if self.config.use_https else "HTTP"
                 self.status_label.config(
-                    text=f"✓ Connected via {protocol}", 
+                    text="Connected via HTTP",
                     style='Success.TLabel'
                 )
-                logging.info(f"Connection test successful ({protocol})")
+                logging.info("Connection test successful (HTTP)")
             except Exception as e:
                 self.status_label.config(
                     text=f"✗ Connection failed: {str(e)}", 

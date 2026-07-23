@@ -14,7 +14,8 @@
 * ✅ **Automatic retries** with exponential backoff
 * ✅ **Raw JSON metadata** saved alongside downloaded files
 * ✅ **CLI and GUI** - both use the same backend engine
-* ✅ **HTTPS with HTTP fallback** support
+* ✅ **HTTP-only XboxUnity compatibility** matching the service endpoints
+* ✅ **ConsoleMods knowledge import** for TitleID, publisher, region, and Multi-ID enrichment
 
 ---
 
@@ -24,7 +25,7 @@
 * Python packages:
 
 ```bash
-pip install requests
+pip install -r requirements.txt
 ```
 
 Tkinter is included with standard Python installs.
@@ -132,7 +133,7 @@ python main.py [TITLEIDS] [options]
 | `--save-config`     | Save current settings to `config.json`                |
 | `--metadata-only`   | Only collect metadata, don't download files           |
 | `--log-level LEVEL` | DEBUG, INFO, WARNING, ERROR                           |
-| `--force-http`      | Force HTTP instead of HTTPS                           |
+| `--force-http`      | Use XboxUnity HTTP endpoints (always enabled)         |
 
 ### Examples
 
@@ -273,11 +274,28 @@ python main.py --config config.json
 
 ## Networking
 
-* **HTTPS preferred** with automatic HTTP fallback
+* **XboxUnity uses HTTP-only endpoints**
 * **Global rate limiting** across all parallel downloads
 * **Automatic retries** with exponential backoff
 * **429 handling** for rate-limited requests
 * Configurable request timeout (default: 30s)
+
+---
+
+## Knowledge Import
+
+Import ConsoleMods TitleID and Multi-ID reference data, then enrich only unknown
+library title/publisher fields:
+
+```bash
+python main.py --sync-knowledge
+```
+
+The normalized knowledge schema stores sources, documents, revisions, entities,
+identifiers, facts, citations, import runs, and conflicts. See
+[`KNOWLEDGE_SOURCES.md`](KNOWLEDGE_SOURCES.md) for migration notes, source and
+licensing considerations, and next steps for XenonLibrary, Free60, Redump DAT,
+and No-Intro DAT adapters.
 
 ---
 

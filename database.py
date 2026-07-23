@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import List, Dict, Optional, Any
 from contextlib import contextmanager
 from app_paths import DATABASE_PATH, ensure_app_dirs
+from knowledge_base import KnowledgeRepository, is_unknown
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +138,8 @@ class DatabaseManager:
                 CREATE INDEX IF NOT EXISTS idx_history_date 
                 ON download_history(download_date)
             ''')
+
+            KnowledgeRepository(conn).ensure_schema()
             
             logger.info(f"Database initialized at {self.db_path}")
     
@@ -160,6 +163,7 @@ class DatabaseManager:
                 
                 # Update search index
                 self._update_search_index(conn, titleid, name, publisher, metadata)
+                self._enrich_unknown_titleid_metadata(conn, titleid)
                 
                 logger.info(f"Added/updated TitleID: {titleid}")
                 return True
@@ -167,6 +171,72 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to add TitleID {titleid}: {e}")
             return False
+
+    def enrich_existing_titleids_from_knowledge(self) -> int:
+        """Fill unknown title/publisher values from imported knowledge facts."""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                rows = cursor.execute("SELECT titleid FROM titleids").fetchall()
+                updated = 0
+                for row in rows:
+                    updated += self._enrich_unknown_titleid_metadata(conn, row["titleid"])
+                return updated
+        except Exception as e:
+            logger.error(f"Failed to enrich TitleIDs from knowledge data: {e}")
+            return 0
+
+    def _enrich_unknown_titleid_metadata(self, conn, titleid: str) -> int:
+        """Apply preferred knowledge facts only where local values are unknown."""
+        repository = KnowledgeRepository(conn)
+        entity = repository.get_entity_by_identifier("titleid", titleid)
+        if not entity:
+            return 0
+
+        facts = repository.get_preferred_facts(entity["id"], ("title", "publisher"))
+        if not facts:
+            return 0
+
+        row = conn.execute(
+            "SELECT name, publisher, metadata FROM titleids WHERE titleid = ?",
+            (titleid,),
+        ).fetchone()
+        if not row:
+            return 0
+
+        new_name = row["name"]
+        new_publisher = row["publisher"]
+        changed = False
+        metadata = {}
+        if row["metadata"]:
+            try:
+                metadata = json.loads(row["metadata"])
+            except json.JSONDecodeError:
+                metadata = {}
+
+        if is_unknown(new_name) and facts.get("title"):
+            new_name = facts["title"]["value"]
+            metadata["title_source"] = facts["title"]["source_name"]
+            changed = True
+
+        if is_unknown(new_publisher) and facts.get("publisher"):
+            new_publisher = facts["publisher"]["value"]
+            metadata["publisher_source"] = facts["publisher"]["source_name"]
+            changed = True
+
+        if not changed:
+            return 0
+
+        conn.execute(
+            """
+            UPDATE titleids
+            SET name = ?, publisher = ?, metadata = ?
+            WHERE titleid = ?
+            """,
+            (new_name, new_publisher, json.dumps(metadata, sort_keys=True), titleid),
+        )
+        self._update_search_index(conn, titleid, new_name, new_publisher, metadata)
+        return 1
     
     def _update_search_index(self, conn, titleid: str, name: Optional[str] = None, 
                             publisher: Optional[str] = None, metadata: Optional[Dict] = None):
