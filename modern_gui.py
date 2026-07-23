@@ -318,7 +318,7 @@ class UnityScraperDesktop:
         self.content.columnconfigure(0, weight=1)
         self.content.rowconfigure(1, weight=1)
         self.shell.bind("<Configure>", self._resize_shell)
-        self.after_idle(lambda: self._resize_shell(None))
+        self.root.after_idle(lambda: self._resize_shell(None))
         self.show_library()
 
     def _resize_shell(self, _event: tk.Event[Any] | None) -> None:
