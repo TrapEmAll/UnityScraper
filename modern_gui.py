@@ -16,7 +16,7 @@ import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from PIL import Image, ImageTk
+from PIL import Image, ImageOps, ImageTk
 from typing import Any
 
 from app_paths import (
@@ -63,7 +63,7 @@ class ResponsiveBackgroundBanner(ttk.Frame):
         image_path: Path,
         title: str,
         subtitle: str,
-        height: int = 190,
+        height: int = 280,
     ) -> None:
         super().__init__(parent)
         self.image_path = image_path
@@ -107,12 +107,20 @@ class ResponsiveBackgroundBanner(ttk.Frame):
         if self._source_image is not None:
             image = self._cover_resize(self._source_image, width, height)
             overlay = Image.new("RGB", image.size, "#050807")
-            image = Image.blend(image, overlay, 0.28)
+            image = Image.blend(image, overlay, 0.05)
             self._photo = ImageTk.PhotoImage(image)
             self.canvas.create_image(0, 0, image=self._photo, anchor=tk.NW)
         else:
             self.canvas.create_rectangle(
                 0, 0, width, height, fill="#0b0f0d", outline=""
+            )
+            self.canvas.create_text(
+                width // 2,
+                height // 2,
+                text=f"Background not loaded: {self.image_path}",
+                anchor=tk.CENTER,
+                fill="#d6e6d3",
+                font=("Segoe UI", 10),
             )
 
         self.canvas.create_rectangle(
@@ -138,18 +146,17 @@ class ResponsiveBackgroundBanner(ttk.Frame):
 
     @staticmethod
     def _cover_resize(image: Image.Image, width: int, height: int) -> Image.Image:
-        source_width, source_height = image.size
-        scale = max(width / source_width, height / source_height)
-        resized = image.resize(
-            (
-                max(1, round(source_width * scale)),
-                max(1, round(source_height * scale)),
-            ),
-            Image.Resampling.LANCZOS,
+        """Fit the complete artwork inside the banner without destructive cropping."""
+        fitted = ImageOps.contain(
+            image,
+            (width, height),
+            method=Image.Resampling.LANCZOS,
         )
-        left = max(0, (resized.width - width) // 2)
-        top = max(0, (resized.height - height) // 2)
-        return resized.crop((left, top, left + width, top + height))
+        background = Image.new("RGB", (width, height), "#080c0a")
+        left = (width - fitted.width) // 2
+        top = (height - fitted.height) // 2
+        background.paste(fitted, (left, top))
+        return background
 
 
 class UnityScraperDesktop:
