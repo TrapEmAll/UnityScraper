@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Private security report
+    url: https://github.com/TrapEmAll/UnityScraper/security/advisories/new
+    about: Report archive, filesystem, credential, or remote-access vulnerabilities privately.

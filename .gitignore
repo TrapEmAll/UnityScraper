@@ -1,60 +1,55 @@
-﻿################################################################################
-# This .gitignore file was automatically created by Microsoft(R) Visual Studio.
-################################################################################
-
-/GUI.zip
-/.vs
-/__pycache__
-
-# Documentation and Reports (not part of core codebase)
-COMPLETION_REPORT.md
-FEATURES_IMPLEMENTED.md
-IMPLEMENTATION_DETAILS.md
-IMPLEMENTATION_SUMMARY.md
-QUICKREF.md
-QUICKSTART_V2.md
-INDEX.md
-.github/copilot-instructions.md
-
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-env/
-venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Environments
 .venv/
-*.log
+venv/
+env/
 
-# Database and local files
-*.db
-*.sqlite
-unityscraper.log
-unityscraper_gui.log
-config.json
+# Runtime data
+UnityScraperData/
 unityscrape/
+downloads/
+exports/
+diagnostics/
+logs/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.log
+config.json
 download_queue.json
+portable.mode
 
-# Build intermediates
-build/
-
-# Temporary and partial files
-*.tmp
+# Partial and temporary files
 *.partial
 *.meta
+*.tmp
+*.bak
 
-# OS files
-.DS_Store
-Thumbs.db
+# Build output
+build/
+dist/
+*.spec.bak
+*.zip
 
-# IDE
+# IDE and operating system
+.vs/
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# IDE Extensions
-/.vs/
-.vscode/settings.json
-.idea/
+.DS_Store
+Thumbs.db

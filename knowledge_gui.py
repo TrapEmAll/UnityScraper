@@ -338,7 +338,10 @@ class KnowledgePage:
             try:
                 result = operation()
             except Exception as exc:
-                self.root.after(0, lambda: self._job_failed(str(exc)))
+                self.root.after(
+                    0,
+                    lambda error=str(exc): self._job_failed(error),
+                )
                 return
             self.root.after(0, lambda: self._job_finished(result))
 

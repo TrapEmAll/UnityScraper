@@ -1,40 +1,37 @@
-# UnityScraper Documentation
+# Documentation
 
-## Start Here
+## Users
 
-- [README.md](README.md) - installation, launch, and core workflows
-- [PROJECT_STATUS.md](PROJECT_STATUS.md) - current implementation and boundaries
-- [KNOWLEDGE_SOURCES.md](KNOWLEDGE_SOURCES.md) - knowledge adapters, provenance,
-  caching, source licenses, and DAT imports
-- [BACKUP_MANAGER.md](BACKUP_MANAGER.md) - local inventory, STFS installation,
-  exports, verification, FTP, and external conversion
+- [README](README.md) - product overview, installation, core workflows, and CLI
+- [Backup Manager](BACKUP_MANAGER.md) - layouts, installation, exports, FTP,
+  verification, and external conversion
+- [Knowledge Sources](KNOWLEDGE_SOURCES.md) - imports, provenance, caching, and
+  source licensing
+- [Advanced Features](ADVANCED_FEATURES.md) - rate limits, resume, diagnostics,
+  portable mode, API, and conversion
+- [REST API](API.md) - authentication, endpoints, configuration, and safety
+- [Project Status](PROJECT_STATUS.md) - completed work, boundaries, and roadmap
+- [Changelog](CHANGELOG.md) - release history
 
-## Additional Reference
+## Contributors
 
-- [ADVANCED_FEATURES.md](ADVANCED_FEATURES.md) - legacy scraper and download tools
-- [INTEGRATION_SUMMARY.md](INTEGRATION_SUMMARY.md) - original feature integration
-- [BACKGROUND_INSTALL.md](BACKGROUND_INSTALL.md) - dark-theme background packaging
+- [Architecture](ARCHITECTURE.md) - modules, layers, schemas, data flows, and
+  packaging
+- [Contributing](CONTRIBUTING.md) - environment, tests, PR expectations, and
+  adapter rules
+- [Security](SECURITY.md) - private reporting and operational boundaries
+- [Community Standards](CODE_OF_CONDUCT.md) - participation expectations
 
-## Developer Map
-
-| Area | Primary modules |
-| --- | --- |
-| XboxUnity collection | `main.py`, `database.py`, `resume.py` |
-| Desktop shell | `desktop_app.py`, `modern_gui.py` |
-| Knowledge model | `knowledge_base.py`, `knowledge_service.py` |
-| Source adapters | `consolemods_adapters.py`, `wiki_adapters.py`, `dat_adapters.py` |
-| Source synchronization | `knowledge_sources.py`, `knowledge_sync.py` |
-| Backup engine | `backup_manager.py`, `backup_service.py` |
-| Backup desktop page | `backup_gui.py` |
-| Tests | `tests.py` |
-
-Run the complete offline test suite with:
+## Validation
 
 ```powershell
+python -m pip install -r requirements.txt -r requirements-dev.txt
+python -m ruff check .
+python -m compileall -q .
 python tests.py
 ```
 
-Build the Windows executable with:
+Windows packaging:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\build_windows.ps1

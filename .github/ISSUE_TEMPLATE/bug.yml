@@ -1,0 +1,55 @@
+name: Bug report
+description: Report reproducible UnityScraper behavior
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: UnityScraper version
+      placeholder: 0.10.0-beta.1 or commit SHA
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: Windows 11, packaged executable or Python 3.12
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Desktop interface
+        - XboxUnity metadata or downloads
+        - Knowledge import
+        - Backup scan or verification
+        - Package or ZIP import
+        - FTP transfer
+        - REST API
+        - Packaging or setup
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Include expected behavior and a minimal reproduction.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized diagnostics
+      description: Remove credentials, private paths, keys, and copyrighted data.
+      render: text
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Data safety
+      options:
+        - label: I removed credentials, keys, copyrighted payloads, and private information.
+          required: true
