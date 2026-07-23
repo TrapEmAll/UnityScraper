@@ -109,6 +109,10 @@ Normal Windows data:
 Portable mode uses `UnityScraperData` beside the application when a
 `portable.mode` marker is present.
 
+Linux follows the XDG Base Directory specification and separates data,
+configuration, cache, and logs under `XDG_DATA_HOME`, `XDG_CONFIG_HOME`,
+`XDG_CACHE_HOME`, and `XDG_STATE_HOME`.
+
 Bundled read-only assets are resolved through `app_paths.resource_path`, which
 works in source and PyInstaller one-file builds.
 
@@ -127,7 +131,7 @@ See [SECURITY.md](SECURITY.md) for reporting and operational guidance.
 
 ## Packaging
 
-`UnityScraper.spec` is the canonical PyInstaller definition. Assets and modules
-loaded indirectly by the GUI are listed explicitly. GitHub Actions validates a
-Windows one-file build on pull requests and publishes ZIP/checksum artifacts for
-version tags.
+`UnityScraper.spec` is the canonical cross-platform PyInstaller definition.
+Assets and modules loaded indirectly by the GUI are listed explicitly. GitHub
+Actions validates Windows and Linux one-file builds on pull requests. Version
+tags publish a Windows ZIP and Linux tarball with separate SHA-256 files.

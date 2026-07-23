@@ -1,21 +1,31 @@
-"""
-Application storage paths with optional portable-mode support.
-
-Portable mode is enabled when either:
-1. A file named ``portable.mode`` exists beside the executable/source files, or
-2. The environment variable ``UNITYSCRAPER_PORTABLE`` is set to ``1``.
-
-Normal installations continue to use %LOCALAPPDATA%\\UnityScraper.
-"""
+"""Cross-platform application storage and bundled-resource paths."""
 
 from __future__ import annotations
 
 import os
+import posixpath
 import shutil
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Mapping
 
 APP_NAME = "UnityScraper"
+APP_SLUG = "unityscraper"
+
+
+@dataclass(frozen=True)
+class StoragePaths:
+    """Resolved writable directories for one UnityScraper installation."""
+
+    base: Path
+    downloads: Path
+    logs: Path
+    config: Path
+    data: Path
+    cache: Path
+    exports: Path
+    diagnostics: Path
 
 
 def app_root() -> Path:
@@ -28,7 +38,7 @@ def app_root() -> Path:
 
 
 def executable_root() -> Path:
-    """Return the writable directory beside the executable or source checkout."""
+    """Return the directory beside the executable or source checkout."""
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
@@ -41,26 +51,100 @@ def portable_mode_enabled() -> bool:
     return env_enabled or marker_enabled
 
 
-def _base_dir() -> Path:
-    """Resolve the root directory used for mutable application data."""
-    if portable_mode_enabled():
-        return executable_root() / "UnityScraperData"
+def resolve_storage_paths(
+    *,
+    os_name: str | None = None,
+    platform_name: str | None = None,
+    environ: Mapping[str, str] | None = None,
+    home: Path | None = None,
+    portable_root: Path | None = None,
+) -> StoragePaths:
+    """Resolve platform-native paths without creating them.
 
-    if os.name == "nt":
-        root = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
-        if root:
-            return Path(root) / APP_NAME
+    Explicit parameters keep path behavior straightforward to test on any host.
+    """
+    current_os = os_name or os.name
+    current_platform = platform_name or sys.platform
+    env = environ if environ is not None else os.environ
+    user_home = Path(home) if home is not None else Path.home()
 
-    return Path.home() / ".unityscraper"
+    def xdg_path(variable: str, fallback: Path) -> Path:
+        value = env.get(variable)
+        if value:
+            candidate = Path(value).expanduser()
+            if posixpath.isabs(value):
+                return candidate
+        return fallback
+
+    if portable_root is not None:
+        base = Path(portable_root) / "UnityScraperData"
+        return StoragePaths(
+            base=base,
+            downloads=base / "downloads",
+            logs=base / "logs",
+            config=base / "config",
+            data=base / "data",
+            cache=base / "cache",
+            exports=base / "exports",
+            diagnostics=base / "diagnostics",
+        )
+
+    if current_os == "nt":
+        root = env.get("LOCALAPPDATA") or env.get("APPDATA")
+        base = Path(root) / APP_NAME if root else user_home / APP_NAME
+        return StoragePaths(
+            base=base,
+            downloads=base / "downloads",
+            logs=base / "logs",
+            config=base / "config",
+            data=base / "data",
+            cache=base / "cache",
+            exports=base / "exports",
+            diagnostics=base / "diagnostics",
+        )
+
+    if current_platform == "darwin":
+        base = user_home / "Library" / "Application Support" / APP_NAME
+        return StoragePaths(
+            base=base,
+            downloads=base / "downloads",
+            logs=user_home / "Library" / "Logs" / APP_NAME,
+            config=base / "config",
+            data=base / "data",
+            cache=user_home / "Library" / "Caches" / APP_NAME,
+            exports=base / "exports",
+            diagnostics=base / "diagnostics",
+        )
+
+    data_home = xdg_path("XDG_DATA_HOME", user_home / ".local" / "share")
+    config_home = xdg_path("XDG_CONFIG_HOME", user_home / ".config")
+    cache_home = xdg_path("XDG_CACHE_HOME", user_home / ".cache")
+    state_home = xdg_path("XDG_STATE_HOME", user_home / ".local" / "state")
+    base = data_home / APP_SLUG
+    return StoragePaths(
+        base=base,
+        downloads=base / "downloads",
+        logs=state_home / APP_SLUG / "logs",
+        config=config_home / APP_SLUG,
+        data=base / "data",
+        cache=cache_home / APP_SLUG,
+        exports=base / "exports",
+        diagnostics=base / "diagnostics",
+    )
 
 
-BASE_DIR = _base_dir()
-DOWNLOADS_DIR = BASE_DIR / "downloads"
-LOG_DIR = BASE_DIR / "logs"
-CONFIG_DIR = BASE_DIR / "config"
-DATA_DIR = BASE_DIR / "data"
-EXPORTS_DIR = BASE_DIR / "exports"
-DIAGNOSTICS_DIR = BASE_DIR / "diagnostics"
+_PATHS = resolve_storage_paths(
+    portable_root=executable_root() if portable_mode_enabled() else None
+)
+
+BASE_DIR = _PATHS.base
+DOWNLOADS_DIR = _PATHS.downloads
+LOG_DIR = _PATHS.logs
+CONFIG_DIR = _PATHS.config
+DATA_DIR = _PATHS.data
+CACHE_DIR = _PATHS.cache
+EXPORTS_DIR = _PATHS.exports
+DIAGNOSTICS_DIR = _PATHS.diagnostics
 
 DATABASE_PATH = DATA_DIR / "unityscraper.db"
 CONFIG_PATH = CONFIG_DIR / "config.json"
@@ -83,6 +167,7 @@ def ensure_app_dirs() -> None:
         LOG_DIR,
         CONFIG_DIR,
         DATA_DIR,
+        CACHE_DIR,
         EXPORTS_DIR,
         DIAGNOSTICS_DIR,
     ):
@@ -112,5 +197,6 @@ def describe_storage() -> str:
         f"Downloads: {DOWNLOADS_DIR}\n"
         f"Exports: {EXPORTS_DIR}\n"
         f"Config: {CONFIG_DIR}\n"
+        f"Cache: {CACHE_DIR}\n"
         f"Logs: {LOG_DIR}"
     )

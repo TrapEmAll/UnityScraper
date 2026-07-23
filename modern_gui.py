@@ -8,9 +8,6 @@ The original GUI remains available as an advanced tools window.
 from __future__ import annotations
 
 import json
-import os
-import subprocess
-import sys
 import tkinter as tk
 import webbrowser
 from pathlib import Path
@@ -40,6 +37,7 @@ from diagnostics import create_diagnostics_bundle
 from knowledge_service import KnowledgeService
 from knowledge_gui import KnowledgePage
 from library_service import GameSummary, LibraryService
+from platform_support import desktop_font_family, open_path
 from setup_wizard import run_first_run_wizard
 
 
@@ -55,18 +53,15 @@ TEXT = "#f2f5f2"
 MUTED = "#a5b2a8"
 DANGER = "#ff5d68"
 WARNING = "#ffc857"
+UI_FONT = desktop_font_family()
 
 
 def _open_path(path: Path) -> None:
     """Open a file or folder using the current operating system."""
-    path = path.resolve()
-
-    if os.name == "nt":
-        os.startfile(str(path))  # type: ignore[attr-defined]
-    elif sys.platform == "darwin":
-        subprocess.Popen(["open", str(path)])
-    else:
-        subprocess.Popen(["xdg-open", str(path)])
+    try:
+        open_path(path)
+    except (OSError, RuntimeError) as exc:
+        messagebox.showerror("Unable to open", str(exc))
 
 
 
@@ -136,7 +131,7 @@ class ResponsiveBackgroundBanner(ttk.Frame):
                 text=f"Background not loaded: {self.image_path}",
                 anchor=tk.CENTER,
                 fill="#d6e6d3",
-                font=("Segoe UI", 10),
+                font=(UI_FONT, 10),
             )
 
         self.canvas.create_rectangle(
@@ -148,7 +143,7 @@ class ResponsiveBackgroundBanner(ttk.Frame):
             text=self.title,
             anchor=tk.W,
             fill="#ffffff",
-            font=("Segoe UI", 23, "bold"),
+            font=(UI_FONT, 23, "bold"),
         )
         self.canvas.create_text(
             30,
@@ -157,7 +152,7 @@ class ResponsiveBackgroundBanner(ttk.Frame):
             anchor=tk.W,
             fill="#d6e6d3",
             width=max(width - 60, 300),
-            font=("Segoe UI", 11),
+            font=(UI_FONT, 11),
         )
 
     @staticmethod
@@ -222,23 +217,23 @@ class UnityScraperDesktop:
         style.configure(".", background=PANEL, foreground=TEXT, fieldbackground=PANEL_ALT,
                         bordercolor=BORDER, darkcolor=PANEL, lightcolor=PANEL,
                         troughcolor=BG, selectbackground="#315f12", selectforeground=TEXT,
-                        font=("Segoe UI", 10))
+                        font=(UI_FONT, 10))
         style.configure("TFrame", background=PANEL)
         style.configure("Sidebar.TFrame", background="#060a07")
         style.configure("Content.TFrame", background=PANEL)
         style.configure("TLabel", background=PANEL, foreground=TEXT)
         style.configure("Brand.TLabel", background="#060a07", foreground=TEXT,
-                        font=("Segoe UI", 17, "bold"))
+                        font=(UI_FONT, 17, "bold"))
         style.configure("AccentBrand.TLabel", background="#060a07", foreground=ACCENT,
-                        font=("Segoe UI", 10))
+                        font=(UI_FONT, 10))
         style.configure("Header.TLabel", background=PANEL, foreground=TEXT,
-                        font=("Segoe UI", 24, "bold"))
+                        font=(UI_FONT, 24, "bold"))
         style.configure("Subheader.TLabel", background=PANEL, foreground=MUTED,
-                        font=("Segoe UI", 11))
+                        font=(UI_FONT, 11))
         style.configure("Metric.TLabel", background=PANEL_ALT, foreground=ACCENT,
-                        font=("Segoe UI", 20, "bold"))
+                        font=(UI_FONT, 20, "bold"))
         style.configure("CardTitle.TLabel", background=PANEL, foreground=ACCENT,
-                        font=("Segoe UI", 11, "bold"))
+                        font=(UI_FONT, 11, "bold"))
         style.configure("StatusDownloaded.TLabel", background=PANEL, foreground=ACCENT)
         style.configure("StatusFailed.TLabel", background=PANEL, foreground=DANGER)
         style.configure("StatusPending.TLabel", background=PANEL, foreground=WARNING)
@@ -259,7 +254,7 @@ class UnityScraperDesktop:
         style.configure("TLabelframe", background=PANEL, foreground=ACCENT,
                         bordercolor=BORDER, relief="solid", borderwidth=1)
         style.configure("TLabelframe.Label", background=PANEL, foreground=ACCENT,
-                        font=("Segoe UI", 10, "bold"))
+                        font=(UI_FONT, 10, "bold"))
         style.configure("TEntry", fieldbackground="#070b08", foreground=TEXT,
                         insertcolor=ACCENT, bordercolor=BORDER, padding=7)
         style.configure("TSpinbox", fieldbackground="#070b08", foreground=TEXT,
@@ -269,7 +264,7 @@ class UnityScraperDesktop:
         style.map("Treeview", background=[("selected", "#23480f")],
                   foreground=[("selected", TEXT)])
         style.configure("Treeview.Heading", background="#101912", foreground=TEXT,
-                        bordercolor=BORDER, relief="flat", font=("Segoe UI", 9, "bold"))
+                        bordercolor=BORDER, relief="flat", font=(UI_FONT, 9, "bold"))
         style.map("Treeview.Heading", background=[("active", "#18271b")],
                   foreground=[("active", ACCENT)])
         style.configure("TNotebook", background=PANEL, bordercolor=BORDER)
@@ -1000,7 +995,7 @@ class UnityScraperDesktop:
 
 
 def main() -> None:
-    root = tk.Tk()
+    root = tk.Tk(className="UnityScraper")
     UnityScraperDesktop(root)
     root.mainloop()
 

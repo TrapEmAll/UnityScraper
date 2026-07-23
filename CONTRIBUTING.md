@@ -20,10 +20,23 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-dev.txt
 ```
 
+Linux:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt
+```
+
 Run the desktop application:
 
 ```powershell
 .\.venv\Scripts\python.exe desktop_app.py
+```
+
+On Linux:
+
+```bash
+.venv/bin/python desktop_app.py
 ```
 
 Run validation:
@@ -33,6 +46,9 @@ Run validation:
 .\.venv\Scripts\python.exe -m compileall -q .
 .\.venv\Scripts\python.exe tests.py
 ```
+
+Replace `.\.venv\Scripts\python.exe` with `.venv/bin/python` on Linux. Validate
+changed shell scripts with `sh -n`.
 
 ## Pull Requests
 

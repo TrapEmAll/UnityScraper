@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import xml.etree.ElementTree as element_tree
 from pathlib import Path
 
 from packaging.version import Version
@@ -28,10 +29,18 @@ def read_versions() -> dict[str, str]:
     if not project_match:
         raise RuntimeError("project.version was not found in pyproject.toml")
 
+    metainfo = element_tree.parse(
+        ROOT / "packaging/linux/io.github.trapemall.UnityScraper.metainfo.xml"
+    ).getroot()
+    release = metainfo.find("./releases/release")
+    if release is None or not release.get("version"):
+        raise RuntimeError("A release version was not found in Linux AppStream metadata")
+
     return {
         "app_version.py": app_match.group(1),
         "VERSION": str(version_data["version"]),
         "pyproject.toml": project_match.group(1),
+        "Linux AppStream metadata": str(release.get("version")),
     }
 
 

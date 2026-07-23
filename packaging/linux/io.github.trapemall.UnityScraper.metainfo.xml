@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.trapemall.UnityScraper</id>
+  <name>UnityScraper</name>
+  <summary>Manage Xbox 360 libraries, metadata, backups, and preservation records</summary>
+  <developer_name>UnityScraper contributors</developer_name>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <description>
+    <p>
+      UnityScraper is an Xbox 360 library, knowledge, title-update, artwork,
+      verification, and backup manager.
+    </p>
+  </description>
+  <icon type="stock">io.github.trapemall.UnityScraper</icon>
+  <categories>
+    <category>Utility</category>
+    <category>Game</category>
+  </categories>
+  <launchable type="desktop-id">io.github.trapemall.UnityScraper.desktop</launchable>
+  <url type="homepage">https://github.com/TrapEmAll/UnityScraper</url>
+  <url type="bugtracker">https://github.com/TrapEmAll/UnityScraper/issues</url>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.10.0-beta.1" date="2026-07-23"/>
+  </releases>
+</component>
