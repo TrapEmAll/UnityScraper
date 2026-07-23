@@ -780,6 +780,89 @@ def main():
         action='store_true',
         help='Import ConsoleMods knowledge data and enrich unknown library metadata'
     )
+    parser.add_argument(
+        '--sync-wikis',
+        action='store_true',
+        help='Cache and index ConsoleMods, XenonLibrary, and Free60 wiki articles'
+    )
+    parser.add_argument(
+        '--wiki-limit',
+        type=int,
+        default=None,
+        help='Optional maximum article count per wiki source'
+    )
+    parser.add_argument(
+        '--import-dat',
+        type=str,
+        help='Import a local Redump or No-Intro XML DAT file'
+    )
+    parser.add_argument(
+        '--dat-source',
+        choices=['redump', 'no-intro'],
+        help='Source type for --import-dat'
+    )
+    parser.add_argument(
+        '--scan-backups',
+        type=str,
+        help='Inventory an Xbox content, USB, or archive folder'
+    )
+    parser.add_argument(
+        '--backup-report',
+        type=str,
+        help='Write backup scan results to a JSON file'
+    )
+    parser.add_argument(
+        '--install-package',
+        type=str,
+        help='Install a user-supplied STFS package into --backup-target'
+    )
+    parser.add_argument(
+        '--import-package-zip',
+        type=str,
+        help='Safely import supported STFS packages from ZIP into --backup-target'
+    )
+    parser.add_argument(
+        '--backup-target',
+        type=str,
+        help='Destination console, USB, or archive root for package operations'
+    )
+    parser.add_argument(
+        '--verify-backups',
+        type=str,
+        help='Scan and structurally verify an Xbox backup target'
+    )
+    parser.add_argument(
+        '--ftp-upload',
+        type=str,
+        help='Upload a user-supplied STFS package to an FTP console target'
+    )
+    parser.add_argument('--ftp-host', type=str, help='FTP console host or address')
+    parser.add_argument('--ftp-port', type=int, default=21, help='FTP port')
+    parser.add_argument('--ftp-user', type=str, default='xbox', help='FTP username')
+    parser.add_argument('--ftp-password', type=str, default='', help='FTP password')
+    parser.add_argument(
+        '--ftp-content-root',
+        type=str,
+        default='/Hdd1/Content/0000000000000000',
+        help='Remote Xbox content root'
+    )
+    parser.add_argument(
+        '--convert-iso',
+        type=str,
+        help='Run a configured external converter for a user-owned ISO'
+    )
+    parser.add_argument('--converter', type=str, help='External converter executable')
+    parser.add_argument(
+        '--converter-arg',
+        action='append',
+        default=[],
+        help='Converter argument; use {input} and {output} placeholders'
+    )
+    parser.add_argument(
+        '--converter-output',
+        type=str,
+        help='Output directory for --convert-iso'
+    )
     
     args = parser.parse_args()
     
@@ -835,6 +918,125 @@ def main():
             sys.exit(0)
         except Exception as e:
             logger.error(f"Knowledge sync failed: {e}")
+            sys.exit(1)
+
+    if args.sync_wikis:
+        try:
+            from knowledge_sync import sync_reference_wikis
+
+            summary = sync_reference_wikis(
+                max_documents_per_source=args.wiki_limit,
+            )
+            logger.info("Wiki sync completed: %s", summary)
+            sys.exit(0)
+        except Exception as e:
+            logger.error(f"Wiki sync failed: {e}")
+            sys.exit(1)
+
+    if args.import_dat:
+        if not args.dat_source:
+            parser.error("--dat-source is required with --import-dat")
+        try:
+            from knowledge_sync import import_dat_knowledge
+
+            summary = import_dat_knowledge(args.import_dat, args.dat_source)
+            logger.info("DAT import completed: %s", summary)
+            sys.exit(0)
+        except Exception as e:
+            logger.error(f"DAT import failed: {e}")
+            sys.exit(1)
+
+    if (
+        args.scan_backups
+        or args.install_package
+        or args.import_package_zip
+        or args.verify_backups
+        or args.ftp_upload
+        or args.convert_iso
+    ):
+        try:
+            from backup_manager import ExternalConverter, FtpTarget, verify_backup_item
+            from backup_service import BackupService
+
+            backup_service = BackupService()
+            if args.scan_backups:
+                result = backup_service.scan(args.scan_backups)
+                logger.info(
+                    "Backup scan completed: %s items, %s bytes, %s warning(s)",
+                    len(result.items),
+                    result.total_size,
+                    len(result.warnings),
+                )
+                if args.backup_report:
+                    Path(args.backup_report).write_text(
+                        json.dumps(result.to_dict(), indent=2),
+                        encoding='utf-8',
+                    )
+                    logger.info("Backup report written to %s", args.backup_report)
+            if args.install_package:
+                if not args.backup_target:
+                    parser.error("--backup-target is required with --install-package")
+                result = backup_service.install_package(
+                    args.install_package, args.backup_target
+                )
+                logger.info("Package %s: %s", result.status, result.destination)
+            if args.import_package_zip:
+                if not args.backup_target:
+                    parser.error("--backup-target is required with --import-package-zip")
+                results = backup_service.import_archive(
+                    args.import_package_zip, args.backup_target
+                )
+                logger.info("Imported %s supported package(s)", len(results))
+            if args.verify_backups:
+                scan = backup_service.scan(args.verify_backups)
+                issues = []
+                for item in scan.items:
+                    item_issues = verify_backup_item(item)
+                    if item_issues:
+                        issues.append(
+                            {"path": str(item.path), "issues": item_issues}
+                        )
+                logger.info(
+                    "Backup verification completed: %s item(s), %s with issues",
+                    len(scan.items),
+                    len(issues),
+                )
+                if args.backup_report:
+                    Path(args.backup_report).write_text(
+                        json.dumps(
+                            {"scan": scan.to_dict(), "verification_issues": issues},
+                            indent=2,
+                        ),
+                        encoding='utf-8',
+                    )
+            if args.ftp_upload:
+                if not args.ftp_host:
+                    parser.error("--ftp-host is required with --ftp-upload")
+                result = backup_service.upload_ftp(
+                    args.ftp_upload,
+                    FtpTarget(
+                        host=args.ftp_host,
+                        port=args.ftp_port,
+                        username=args.ftp_user,
+                        password=args.ftp_password,
+                        content_root=args.ftp_content_root,
+                    ),
+                )
+                logger.info("FTP upload completed: %s", result.destination)
+            if args.convert_iso:
+                if not args.converter or not args.converter_output:
+                    parser.error(
+                        "--converter and --converter-output are required with --convert-iso"
+                    )
+                converter = ExternalConverter(
+                    args.converter,
+                    args.converter_arg or ["{input}", "{output}"],
+                )
+                completed = converter.convert(args.convert_iso, args.converter_output)
+                logger.info("External converter completed with exit code %s", completed.returncode)
+            sys.exit(0)
+        except Exception as e:
+            logger.error("Backup operation failed: %s", e)
             sys.exit(1)
 
     scraper = UnityScraper(config)

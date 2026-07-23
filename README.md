@@ -1,7 +1,10 @@
 <img width="1097" height="829" alt="Screenshot 2026-05-13 210717" src="https://github.com/user-attachments/assets/b35b363a-140c-4b93-97fb-e08b0c4fded0" />
 # UnityScraper
 
-**UnityScraper** is a Python tool for archiving **Xbox 360 Title Updates (TUs)** and **custom cover art** from **XboxUnity.net**. It features a two-phase workflow: collect metadata first, then selectively download files through the GUI.
+**UnityScraper** is an offline-capable Xbox 360 library, knowledge, update,
+artwork, verification, and backup manager. It combines source-attributed
+reference metadata with tools for content the user already owns. XboxUnity
+Title Updates and cover art use the service's required HTTP endpoints.
 
 ## Features
 
@@ -16,6 +19,12 @@
 * ✅ **CLI and GUI** - both use the same backend engine
 * ✅ **HTTP-only XboxUnity compatibility** matching the service endpoints
 * ✅ **ConsoleMods knowledge import** for TitleID, publisher, region, and Multi-ID enrichment
+* **Knowledge browser** for ConsoleMods, XenonLibrary, Free60, Redump, and No-Intro metadata
+* **Backup inventory** for Xbox content roots, USB drives, archives, and extracted games
+* **Safe STFS installs** with content-aware paths, partial files, and SHA-256 verification
+* **Preservation exports** with per-file hashes and JSON manifests
+* **Console FTP transfer** with in-memory credentials and atomic remote naming
+* **External ISO converter integration** without bundling converter code or game content
 
 ---
 
@@ -41,6 +50,18 @@ Run the desktop app directly:
 ```bat
 Run-UnityScraper.bat
 ```
+
+The primary Python entry point is:
+
+```powershell
+python desktop_app.py
+```
+
+The **Knowledge** workspace manages source imports and provenance. The
+**Backup Manager** inventories local targets, installs user-supplied packages,
+exports verified archives, and transfers packages to a configured console.
+See [KNOWLEDGE_SOURCES.md](KNOWLEDGE_SOURCES.md) and
+[BACKUP_MANAGER.md](BACKUP_MANAGER.md).
 
 Or build a standalone Windows executable:
 
@@ -291,11 +312,33 @@ library title/publisher fields:
 python main.py --sync-knowledge
 ```
 
+Cache and index Xbox 360 articles from ConsoleMods, XenonLibrary, and Free60:
+
+```bash
+python main.py --sync-wikis
+```
+
+For a smaller first sync, limit each source:
+
+```bash
+python main.py --sync-wikis --wiki-limit 25
+```
+
+Import user-downloaded preservation DAT files:
+
+```bash
+python main.py --import-dat "path/to/xbox360.dat" --dat-source redump
+python main.py --import-dat "path/to/xbox360-digital.dat" --dat-source no-intro
+```
+
+The desktop application's **Knowledge** page provides the same imports through
+file pickers, plus global search, source licenses and status, citations, and
+conflict review.
+
 The normalized knowledge schema stores sources, documents, revisions, entities,
 identifiers, facts, citations, import runs, and conflicts. See
 [`KNOWLEDGE_SOURCES.md`](KNOWLEDGE_SOURCES.md) for migration notes, source and
-licensing considerations, and next steps for XenonLibrary, Free60, Redump DAT,
-and No-Intro DAT adapters.
+licensing considerations.
 
 ---
 
@@ -379,12 +422,11 @@ Created and maintained by **Sthornberry9**
 
 ---
 
-## Future Enhancements
+## Next Enhancements
 
-1. **Resume support** for interrupted downloads
-2. **Batch operations** for bulk downloads
-3. **Search/filter** in database for large collections
-4. **Export** metadata to CSV/JSON
-5. **Notifications** when metadata is updated
+1. Parse local XEX/STFS headers and match owned files to knowledge entities.
+2. Add field-specific source-priority controls for conflict resolution.
+3. Add optional scheduled knowledge refreshes.
+4. Add exportable offline HTML knowledge reports.
 
 ---

@@ -8,6 +8,7 @@ import tempfile
 import shutil
 import json
 import time
+import zipfile
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 import requests
@@ -22,6 +23,24 @@ from consolemods_adapters import (
     short_code_to_titleid,
 )
 from knowledge_base import EntityRecord, Fact, Identifier, KnowledgeRepository
+from dat_adapters import parse_dat
+from knowledge_service import KnowledgeService
+from knowledge_sources import KnowledgeImportService, SourceInfo
+from wiki_adapters import extract_article_text, parse_sitemap
+from backup_manager import (
+    BackupItem,
+    FtpBackupClient,
+    FtpTarget,
+    InvalidPackageError,
+    UnsafeArchiveError,
+    atomic_copy,
+    import_stfs_zip,
+    inspect_stfs,
+    inspect_xbe,
+    package_destination,
+    scan_local_target,
+)
+from backup_service import BackupRepository
 
 
 class TestConfig(unittest.TestCase):
@@ -195,6 +214,24 @@ class TestDatabaseManager(unittest.TestCase):
                 """
             ).fetchone()
         self.assertIsNotNone(row)
+
+    def test_backup_schema_initialization(self):
+        """Test additive backup inventory and operation tables are created."""
+        expected = {
+            "backup_targets",
+            "backup_scans",
+            "backup_inventory",
+            "backup_operations",
+        }
+        with self.db.get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE type = 'table' AND name LIKE 'backup_%'
+                """
+            ).fetchall()
+        self.assertTrue(expected.issubset({row["name"] for row in rows}))
     
     def test_add_titleid(self):
         """Test adding TitleID"""
@@ -349,6 +386,116 @@ class TestConsoleModsAdapters(unittest.TestCase):
         bioshock = [item for item in parsed if item.title == "BioShock"]
         self.assertEqual(bioshock[0].titleid, "545407D8")
         self.assertIn("5454080E", bioshock[0].aliases)
+
+
+class TestKnowledgeApplication(unittest.TestCase):
+    """Test DAT ingestion, wiki parsing, and knowledge browser queries."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = Path(self.temp_dir) / "knowledge.db"
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir)
+
+    def test_parse_redump_style_dat(self):
+        sample = """
+        <datafile>
+          <header><name>Microsoft - Xbox 360</name></header>
+          <game name="Example Game (USA)">
+            <description>Example Game (USA)</description>
+            <region>USA</region>
+            <serial>AB-1234</serial>
+            <rom name="example.iso" size="1024"
+                 crc="1234ABCD" md5="0123456789ABCDEF0123456789ABCDEF"
+                 sha1="0123456789ABCDEF0123456789ABCDEF01234567"/>
+          </game>
+        </datafile>
+        """
+        records = parse_dat(sample, "disc_release")
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].canonical_name, "Example Game (USA)")
+        identifiers = {(item.kind, item.value) for item in records[0].identifiers}
+        self.assertIn(("serial", "AB-1234"), identifiers)
+        self.assertIn(("crc32", "1234ABCD"), identifiers)
+        self.assertIn(("sha1", "0123456789ABCDEF0123456789ABCDEF01234567"), identifiers)
+
+    def test_parse_sitemap_and_article(self):
+        sitemap = """
+        <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+          <url><loc>https://free60.org/Hardware/</loc></url>
+          <url><loc>https://free60.org/Formats/</loc></url>
+        </urlset>
+        """
+        pages, children = parse_sitemap(sitemap)
+        self.assertEqual(len(pages), 2)
+        self.assertEqual(children, [])
+
+        title, body = extract_article_text(
+            "<html><head><title>NAND - Free60 Wiki</title></head>"
+            "<body><h1>NAND</h1><p>Flash storage reference.</p>"
+            "<script>ignore me</script></body></html>",
+            "Fallback",
+        )
+        self.assertEqual(title, "NAND")
+        self.assertIn("Flash storage reference.", body)
+        self.assertNotIn("ignore me", body)
+
+    def test_search_and_provenance_details(self):
+        db = DatabaseManager(str(self.db_path))
+        with db.get_connection() as connection:
+            repository = KnowledgeRepository(connection)
+            source_id = repository.upsert_source(
+                "test-wiki",
+                "Test Wiki",
+                homepage_url="https://example.test/",
+                license_name="CC BY 4.0",
+            )
+            repository.upsert_entity_record(
+                EntityRecord(
+                    entity_type="hardware",
+                    canonical_name="Xenon Motherboard",
+                    identifiers=(Identifier("part_number", "X803600-011"),),
+                    facts=(Fact("nand_size", "16 MB"),),
+                ),
+                source_id,
+            )
+
+        service = KnowledgeService(self.db_path)
+        results = service.search("X803600")
+        self.assertEqual(len(results), 1)
+        details = service.entity_details(results[0]["id"])
+        self.assertEqual(details["entity"]["canonical_name"], "Xenon Motherboard")
+        self.assertEqual(details["facts"][0]["source_name"], "Test Wiki")
+        test_source = next(
+            row for row in service.list_sources() if row["slug"] == "test-wiki"
+        )
+        self.assertEqual(test_source["license_name"], "CC BY 4.0")
+
+    def test_failed_import_run_is_persisted(self):
+        class FailingAdapter:
+            source = SourceInfo("failing", "Failing Source", "https://example.test")
+            adapter_name = "failing_adapter"
+
+            @staticmethod
+            def fetch_documents():
+                raise RuntimeError("source unavailable")
+                yield
+
+            @staticmethod
+            def parse_document(document):
+                raise AssertionError(document)
+
+        db = DatabaseManager(str(self.db_path))
+        with db.get_connection() as connection:
+            repository = KnowledgeRepository(connection)
+            summary = KnowledgeImportService(repository).run_adapter(FailingAdapter())
+            self.assertEqual(summary["status"], "failed")
+
+        service = KnowledgeService(self.db_path)
+        run = service.list_import_runs()[0]
+        self.assertEqual(run["status"], "failed")
+        self.assertIn("source unavailable", run["errors"])
 
 
 class TestDownloadProgress(unittest.TestCase):
@@ -511,6 +658,176 @@ class TestIntegration(unittest.TestCase):
         self.assertTrue(export_file.exists())
 
 
+class TestBackupManager(unittest.TestCase):
+    """Test local Xbox backup inspection and safe transfer behavior."""
+
+    def setUp(self):
+        self.temp_dir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir)
+
+    def _stfs(
+        self,
+        name="package.bin",
+        titleid="4D5307E6",
+        mediaid="12345678",
+        content_type=0x000D0000,
+        title="Test Game",
+    ):
+        path = self.temp_dir / name
+        header = bytearray(0x1791)
+        header[:4] = b"LIVE"
+        header[0x344:0x348] = content_type.to_bytes(4, "big")
+        header[0x354:0x358] = bytes.fromhex(mediaid)
+        header[0x360:0x364] = bytes.fromhex(titleid)
+        header[0x366] = 1
+        header[0x367] = 1
+        encoded = title.encode("utf-16-be")
+        header[0x411:0x411 + len(encoded)] = encoded
+        header[0x1691:0x1691 + len(encoded)] = encoded
+        path.write_bytes(header + b"payload")
+        return path
+
+    def test_inspect_stfs_and_destination(self):
+        package = inspect_stfs(self._stfs())
+        self.assertEqual(package.title_id, "4D5307E6")
+        self.assertEqual(package.media_id, "12345678")
+        self.assertEqual(package.content_label, "Xbox Live Arcade")
+        destination = package_destination(package, self.temp_dir / "target")
+        self.assertIn("000D0000", destination.parts)
+        self.assertEqual(destination.parent.parent.name, "4D5307E6")
+
+    def test_rejects_unknown_stfs_content_type(self):
+        with self.assertRaises(InvalidPackageError):
+            inspect_stfs(self._stfs(content_type=0xDEADBEEF))
+
+    def test_atomic_copy_verifies_and_publishes(self):
+        source = self.temp_dir / "source.bin"
+        source.write_bytes(b"xbox" * 1000)
+        destination = self.temp_dir / "out" / "destination.bin"
+        result = atomic_copy(source, destination)
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(source.read_bytes(), destination.read_bytes())
+        self.assertFalse(destination.with_name("destination.bin.partial").exists())
+
+    def test_zip_import_rejects_traversal(self):
+        archive = self.temp_dir / "unsafe.zip"
+        with zipfile.ZipFile(archive, "w") as handle:
+            handle.writestr("../escape.bin", b"unsafe")
+        with self.assertRaises(UnsafeArchiveError):
+            import_stfs_zip(archive, self.temp_dir / "target")
+
+    def test_zip_import_installs_package(self):
+        package = self._stfs()
+        archive = self.temp_dir / "packages.zip"
+        with zipfile.ZipFile(archive, "w") as handle:
+            handle.write(package, "nested/game")
+        results = import_stfs_zip(archive, self.temp_dir / "target")
+        self.assertEqual(len(results), 1)
+        self.assertTrue(Path(results[0].destination).is_file())
+
+    def test_zip_import_preserves_validated_content_tree(self):
+        archive = self.temp_dir / "god.zip"
+        with zipfile.ZipFile(archive, "w") as handle:
+            handle.writestr(
+                "Content/0000000000000000/4D5307E6/00007000/12345678",
+                b"god-header",
+            )
+            handle.writestr(
+                "Content/0000000000000000/4D5307E6/00007000/"
+                "12345678.data/Data0000",
+                b"god-chunk",
+            )
+            handle.writestr(
+                "Content/0000000000000000/4D5307E6/DEADBEEF/ignored",
+                b"unknown",
+            )
+        target = self.temp_dir / "target"
+        results = import_stfs_zip(archive, target)
+        self.assertEqual(len(results), 2)
+        base = target / "Content" / "0000000000000000" / "4D5307E6"
+        self.assertEqual(
+            (base / "00007000" / "12345678.data" / "Data0000").read_bytes(),
+            b"god-chunk",
+        )
+        self.assertFalse((base / "DEADBEEF" / "ignored").exists())
+
+    def test_scan_detects_base_game_and_orphan_support_content(self):
+        content = self.temp_dir / "Content" / "0000000000000000"
+        base = content / "4D5307E6" / "00007000"
+        orphan = content / "555308C5" / "000B0000"
+        base.mkdir(parents=True)
+        orphan.mkdir(parents=True)
+        (base / "12345678").write_bytes(b"header")
+        (orphan / "update").write_bytes(b"update")
+        result = scan_local_target(self.temp_dir, lambda value: f"Game {value}")
+        statuses = {item.title_id: item.status for item in result.items}
+        self.assertEqual(statuses["4D5307E6"], "ready")
+        self.assertEqual(statuses["555308C5"], "incomplete")
+        self.assertEqual(len(result.warnings), 1)
+
+    def test_inspect_xbe_certificate(self):
+        path = self.temp_dir / "default.xbe"
+        data = bytearray(0x300)
+        data[:4] = b"XBEH"
+        base = 0x10000
+        certificate_offset = 0x180
+        data[0x104:0x108] = base.to_bytes(4, "little")
+        data[0x118:0x11C] = (base + certificate_offset).to_bytes(4, "little")
+        data[certificate_offset + 0x8:certificate_offset + 0xC] = (
+            0x4D530064
+        ).to_bytes(4, "little")
+        title = "Original Game".encode("utf-16-le")
+        start = certificate_offset + 0xC
+        data[start:start + len(title)] = title
+        path.write_bytes(data)
+        package = inspect_xbe(path)
+        self.assertEqual(package.title_id, "4D530064")
+        self.assertEqual(package.title_name, "Original Game")
+
+    def test_backup_schema_is_additive_and_omits_passwords(self):
+        repository = BackupRepository(self.temp_dir / "backup.db")
+        repository.save_ftp_target(
+            "Console",
+            FtpTarget(host="192.0.2.10", password="do-not-store"),
+        )
+        rows = repository.list_targets()
+        self.assertEqual(len(rows), 1)
+        self.assertNotIn("do-not-store", rows[0]["settings_json"])
+
+    def test_ftp_upload_skips_existing_remote_package(self):
+        package = self._stfs()
+
+        class FakeFtp:
+            stored = False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def mkd(self, _path):
+                return None
+
+            def voidcmd(self, _command):
+                return "200"
+
+            def size(self, _path):
+                return 100
+
+            def storbinary(self, *_args, **_kwargs):
+                self.stored = True
+
+        fake = FakeFtp()
+        client = FtpBackupClient(FtpTarget(host="192.0.2.10"))
+        with patch.object(client, "_connect", return_value=fake):
+            result = client.upload_stfs(package)
+        self.assertEqual(result.status, "skipped")
+        self.assertFalse(fake.stored)
+
+
 def run_tests():
     """Run all tests"""
     # Create test suite
@@ -523,10 +840,12 @@ def run_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestUnityScraper))
     suite.addTests(loader.loadTestsFromTestCase(TestDatabaseManager))
     suite.addTests(loader.loadTestsFromTestCase(TestConsoleModsAdapters))
+    suite.addTests(loader.loadTestsFromTestCase(TestKnowledgeApplication))
     suite.addTests(loader.loadTestsFromTestCase(TestDownloadProgress))
     suite.addTests(loader.loadTestsFromTestCase(TestResumableDownloader))
     suite.addTests(loader.loadTestsFromTestCase(TestBatchDownloadManager))
     suite.addTests(loader.loadTestsFromTestCase(TestIntegration))
+    suite.addTests(loader.loadTestsFromTestCase(TestBackupManager))
     
     # Run tests
     runner = unittest.TextTestRunner(verbosity=2)

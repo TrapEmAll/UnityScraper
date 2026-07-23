@@ -21,7 +21,17 @@ python -m PyInstaller `
     --onefile `
     --icon "assets\UnityScraper.ico" `
     --add-data "JSON.txt;." `
-    --add-data "assets\UnityScraper.png;assets" `
+    --add-data "VERSION;." `
+    --add-data "assets;assets" `
+    --hidden-import backup_gui `
+    --hidden-import backup_manager `
+    --hidden-import backup_service `
+    --hidden-import consolemods_adapters `
+    --hidden-import dat_adapters `
+    --hidden-import knowledge_gui `
+    --hidden-import knowledge_service `
+    --hidden-import knowledge_sync `
+    --hidden-import wiki_adapters `
     desktop_app.py
 
 Write-Host ""

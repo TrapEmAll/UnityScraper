@@ -9,17 +9,17 @@ import json
 from pathlib import Path
 from typing import Optional, Dict, Tuple
 from packaging import version
+from app_version import APP_VERSION
 
 logger = logging.getLogger(__name__)
 
-# Current version (update manually)
-CURRENT_VERSION = "1.1.0"
+CURRENT_VERSION = APP_VERSION
 
 # GitHub release API endpoint
-GITHUB_API_URL = "https://api.github.com/repos/yourusername/UnityScraper/releases/latest"
+GITHUB_API_URL = "https://api.github.com/repos/TrapEmAll/UnityScraper/releases/latest"
 
 # Alternative: version file URL (simpler, doesn't require GitHub API)
-VERSION_FILE_URL = "https://raw.githubusercontent.com/yourusername/UnityScraper/main/VERSION"
+VERSION_FILE_URL = "https://raw.githubusercontent.com/TrapEmAll/UnityScraper/main/VERSION"
 
 
 class VersionChecker:

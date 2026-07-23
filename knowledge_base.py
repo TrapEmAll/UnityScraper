@@ -270,6 +270,14 @@ class KnowledgeRepository:
             "ON knowledge_facts(entity_id, property, confidence DESC)"
         )
         cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_knowledge_entities_type_name "
+            "ON knowledge_entities(entity_type, normalized_name)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_knowledge_facts_property "
+            "ON knowledge_facts(property)"
+        )
+        cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_citations_fact ON fact_citations(fact_id)"
         )
 
@@ -474,20 +482,28 @@ class KnowledgeRepository:
             )
             self.record_conflicts(entity_id, fact, source_id)
             if fact_id and (fact.source_url or document_id):
+                citation = (
+                    fact_id,
+                    document_id,
+                    revision_id,
+                    fact.source_url,
+                    fact.source_title,
+                    json.dumps(fact.context, sort_keys=True),
+                )
                 cursor.execute(
                     """
                     INSERT INTO fact_citations
                         (fact_id, document_id, revision_id, source_url, source_title, context)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    SELECT ?, ?, ?, ?, ?, ?
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM fact_citations
+                        WHERE fact_id = ?
+                          AND COALESCE(document_id, 0) = COALESCE(?, 0)
+                          AND COALESCE(revision_id, 0) = COALESCE(?, 0)
+                          AND COALESCE(source_url, '') = COALESCE(?, '')
+                    )
                     """,
-                    (
-                        fact_id,
-                        document_id,
-                        revision_id,
-                        fact.source_url,
-                        fact.source_title,
-                        json.dumps(fact.context, sort_keys=True),
-                    ),
+                    (*citation, fact_id, document_id, revision_id, fact.source_url),
                 )
         return entity_id
 

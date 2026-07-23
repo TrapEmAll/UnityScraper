@@ -188,6 +188,7 @@ class KnowledgeImportService:
         records_imported = 0
         errors: list[str] = []
 
+        status = "success"
         try:
             for document in adapter.fetch_documents():
                 document_id, revision_id = self.repository.upsert_document(
@@ -213,18 +214,13 @@ class KnowledgeImportService:
                     records_imported += 1
         except Exception as exc:
             errors.append(str(exc))
-            self.repository.finish_import_run(
-                run_id,
-                "failed",
-                records_seen,
-                records_imported,
-                errors,
-            )
-            raise
+            status = "partial" if records_imported else "failed"
+        if status == "success" and records_seen == 0:
+            status = "empty"
 
         self.repository.finish_import_run(
             run_id,
-            "success",
+            status,
             records_seen,
             records_imported,
             errors,
@@ -232,6 +228,8 @@ class KnowledgeImportService:
         return {
             "source": source.slug,
             "adapter": adapter.adapter_name,
+            "status": status,
             "records_seen": records_seen,
             "records_imported": records_imported,
+            "error": "; ".join(errors),
         }
