@@ -40,6 +40,17 @@ from setup_wizard import run_first_run_wizard
 
 APP_VERSION = "0.8.0-beta"
 
+BG = "#050806"
+PANEL = "#0a0f0c"
+PANEL_ALT = "#0d1510"
+BORDER = "#26352a"
+ACCENT = "#72e000"
+ACCENT_HOVER = "#8cff18"
+TEXT = "#f2f5f2"
+MUTED = "#a5b2a8"
+DANGER = "#ff5d68"
+WARNING = "#ffc857"
+
 
 def _open_path(path: Path) -> None:
     """Open a file or folder using the current operating system."""
@@ -194,73 +205,156 @@ class UnityScraperDesktop:
             pass
 
     def _configure_style(self) -> None:
-        style = ttk.Style()
+        self.root.configure(background=BG)
+        style = ttk.Style(self.root)
         try:
-            style.theme_use("vista" if os.name == "nt" else "clam")
-        except tk.TclError:
             style.theme_use("clam")
+        except tk.TclError:
+            pass
 
-        style.configure("Nav.TButton", anchor=tk.W, padding=(14, 11))
-        style.configure("Header.TLabel", font=("Segoe UI", 20, "bold"))
-        style.configure("Subheader.TLabel", font=("Segoe UI", 11))
-        style.configure("Metric.TLabel", font=("Segoe UI", 18, "bold"))
-        style.configure("CardTitle.TLabel", font=("Segoe UI", 11, "bold"))
-        style.configure("StatusDownloaded.TLabel", foreground="#237a3b")
-        style.configure("StatusFailed.TLabel", foreground="#a51d2d")
-        style.configure("StatusPending.TLabel", foreground="#856404")
+        style.configure(".", background=PANEL, foreground=TEXT, fieldbackground=PANEL_ALT,
+                        bordercolor=BORDER, darkcolor=PANEL, lightcolor=PANEL,
+                        troughcolor=BG, selectbackground="#315f12", selectforeground=TEXT,
+                        font=("Segoe UI", 10))
+        style.configure("TFrame", background=PANEL)
+        style.configure("Sidebar.TFrame", background="#060a07")
+        style.configure("Content.TFrame", background=PANEL)
+        style.configure("TLabel", background=PANEL, foreground=TEXT)
+        style.configure("Brand.TLabel", background="#060a07", foreground=TEXT,
+                        font=("Segoe UI", 17, "bold"))
+        style.configure("AccentBrand.TLabel", background="#060a07", foreground=ACCENT,
+                        font=("Segoe UI", 10))
+        style.configure("Header.TLabel", background=PANEL, foreground=TEXT,
+                        font=("Segoe UI", 24, "bold"))
+        style.configure("Subheader.TLabel", background=PANEL, foreground=MUTED,
+                        font=("Segoe UI", 11))
+        style.configure("Metric.TLabel", background=PANEL_ALT, foreground=ACCENT,
+                        font=("Segoe UI", 20, "bold"))
+        style.configure("CardTitle.TLabel", background=PANEL, foreground=ACCENT,
+                        font=("Segoe UI", 11, "bold"))
+        style.configure("StatusDownloaded.TLabel", background=PANEL, foreground=ACCENT)
+        style.configure("StatusFailed.TLabel", background=PANEL, foreground=DANGER)
+        style.configure("StatusPending.TLabel", background=PANEL, foreground=WARNING)
 
+        style.configure("TButton", background=PANEL_ALT, foreground=TEXT, padding=(12, 8),
+                        borderwidth=1, relief="flat")
+        style.map("TButton", background=[("active", "#152319"), ("pressed", "#1b321e")],
+                  foreground=[("active", ACCENT_HOVER)])
+        style.configure("Nav.TButton", anchor=tk.W, padding=(16, 13), background="#080d09",
+                        foreground=TEXT, bordercolor="#1f3321")
+        style.map("Nav.TButton", background=[("active", "#142017"), ("pressed", "#1c351c")],
+                  foreground=[("active", ACCENT_HOVER)])
+        style.configure("Accent.TButton", background="#183a0b", foreground=TEXT,
+                        bordercolor=ACCENT)
+        style.map("Accent.TButton", background=[("active", "#24580d")],
+                  foreground=[("active", TEXT)])
+
+        style.configure("TLabelframe", background=PANEL, foreground=ACCENT,
+                        bordercolor=BORDER, relief="solid", borderwidth=1)
+        style.configure("TLabelframe.Label", background=PANEL, foreground=ACCENT,
+                        font=("Segoe UI", 10, "bold"))
+        style.configure("TEntry", fieldbackground="#070b08", foreground=TEXT,
+                        insertcolor=ACCENT, bordercolor=BORDER, padding=7)
+        style.configure("TSpinbox", fieldbackground="#070b08", foreground=TEXT,
+                        insertcolor=ACCENT, bordercolor=BORDER, arrowcolor=ACCENT)
+        style.configure("Treeview", background="#070b08", fieldbackground="#070b08",
+                        foreground=TEXT, rowheight=27, bordercolor=BORDER)
+        style.map("Treeview", background=[("selected", "#23480f")],
+                  foreground=[("selected", TEXT)])
+        style.configure("Treeview.Heading", background="#101912", foreground=TEXT,
+                        bordercolor=BORDER, relief="flat", font=("Segoe UI", 9, "bold"))
+        style.map("Treeview.Heading", background=[("active", "#18271b")],
+                  foreground=[("active", ACCENT)])
+        style.configure("TNotebook", background=PANEL, bordercolor=BORDER)
+        style.configure("TNotebook.Tab", background="#0b120d", foreground=MUTED, padding=(12, 7))
+        style.map("TNotebook.Tab", background=[("selected", "#173114"), ("active", "#132219")],
+                  foreground=[("selected", ACCENT), ("active", TEXT)])
+        style.configure("Vertical.TScrollbar", background="#111a13", troughcolor="#050806",
+                        arrowcolor=ACCENT, bordercolor=BORDER)
     def _build_shell(self) -> None:
-        self.root.columnconfigure(1, weight=1)
-        self.root.rowconfigure(0, weight=1)
+        self._wallpaper_source: Image.Image | None = None
+        self._wallpaper_photo: ImageTk.PhotoImage | None = None
+        wallpaper = resource_path("assets", "backgrounds", "unityscraper_full_background.png")
+        if wallpaper.exists():
+            try:
+                self._wallpaper_source = Image.open(wallpaper).convert("RGB")
+            except OSError:
+                self._wallpaper_source = None
 
-        nav = ttk.Frame(self.root, padding=(10, 14))
-        nav.grid(row=0, column=0, sticky="ns")
+        self.shell = tk.Canvas(self.root, background=BG, highlightthickness=0, borderwidth=0)
+        self.shell.pack(fill=tk.BOTH, expand=True)
+        self._wallpaper_item = self.shell.create_image(0, 0, anchor=tk.NW)
 
-        ttk.Label(nav, text="UnityScraper", font=("Segoe UI", 15, "bold")).pack(
-            anchor=tk.W, padx=8, pady=(0, 16)
+        nav = ttk.Frame(self.shell, padding=(14, 18), style="Sidebar.TFrame")
+        self.content = ttk.Frame(self.shell, padding=18, style="Content.TFrame")
+        self._nav_window = self.shell.create_window(0, 0, anchor=tk.NW, window=nav)
+        self._content_window = self.shell.create_window(0, 0, anchor=tk.NW, window=self.content)
+
+        ttk.Label(nav, text="UNITY", style="Brand.TLabel").pack(anchor=tk.W, padx=6)
+        ttk.Label(nav, text="SCRAPER", style="AccentBrand.TLabel").pack(
+            anchor=tk.W, padx=6, pady=(0, 22)
         )
 
         pages = (
-            ("Library", self.show_library),
-            ("Add Games", self.show_add_games),
-            ("Downloads", self.show_downloads),
-            ("Archive Health", self.show_health),
-            ("Settings", self.show_settings),
-            ("Help & About", self.show_about),
+            ("▣   LIBRARY", self.show_library),
+            ("✚   ADD GAMES", self.show_add_games),
+            ("⬇   DOWNLOADS", self.show_downloads),
+            ("⬡   ARCHIVE HEALTH", self.show_health),
+            ("⚙   SETTINGS", self.show_settings),
+            ("?   HELP & ABOUT", self.show_about),
         )
         for label, callback in pages:
-            ttk.Button(
-                nav,
-                text=label,
-                command=callback,
-                style="Nav.TButton",
-                width=20,
-            ).pack(fill=tk.X, pady=2)
+            ttk.Button(nav, text=label, command=callback, style="Nav.TButton", width=22).pack(
+                fill=tk.X, pady=5
+            )
 
-        self.content = ttk.Frame(self.root, padding=20)
-        self.content.grid(row=0, column=1, sticky="nsew")
+        ttk.Label(nav, text="● CONNECTED", style="AccentBrand.TLabel").pack(
+            side=tk.BOTTOM, anchor=tk.W, padx=6, pady=(4, 0)
+        )
+        ttk.Label(nav, text="Ready", style="AccentBrand.TLabel").pack(
+            side=tk.BOTTOM, anchor=tk.W, padx=6
+        )
+
         self.content.columnconfigure(0, weight=1)
         self.content.rowconfigure(1, weight=1)
-
+        self.shell.bind("<Configure>", self._resize_shell)
+        self.after_idle(lambda: self._resize_shell(None))
         self.show_library()
+
+    def _resize_shell(self, _event: tk.Event[Any] | None) -> None:
+        width = max(self.shell.winfo_width(), 980)
+        height = max(self.shell.winfo_height(), 640)
+        nav_width = 230
+        gap = 12
+
+        if self._wallpaper_source is not None:
+            image = ImageOps.fit(
+                self._wallpaper_source, (width, height),
+                method=Image.Resampling.LANCZOS, centering=(0.5, 0.5)
+            )
+            image = Image.blend(image, Image.new("RGB", image.size, BG), 0.30)
+            self._wallpaper_photo = ImageTk.PhotoImage(image)
+            self.shell.itemconfigure(self._wallpaper_item, image=self._wallpaper_photo)
+
+        self.shell.coords(self._nav_window, 0, 0)
+        self.shell.itemconfigure(self._nav_window, width=nav_width, height=height)
+        self.shell.coords(self._content_window, nav_width + gap, 0)
+        self.shell.itemconfigure(
+            self._content_window, width=max(width - nav_width - gap, 1), height=height
+        )
 
     def _clear_content(self) -> None:
         for child in self.content.winfo_children():
             child.destroy()
 
     def _page_header(self, title: str, subtitle: str) -> None:
-        background = resource_path(
-            "assets",
-            "backgrounds",
-            "unityscraper_xbox_background.png",
+        header = ttk.Frame(self.content, style="Content.TFrame")
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 14))
+        ttk.Label(header, text=title.upper(), style="Header.TLabel").pack(anchor=tk.W)
+        ttk.Label(header, text=subtitle, style="Subheader.TLabel").pack(
+            anchor=tk.W, pady=(5, 0)
         )
-        header = ResponsiveBackgroundBanner(
-            self.content,
-            image_path=background,
-            title=title,
-            subtitle=subtitle,
-        )
-        header.grid(row=0, column=0, sticky="ew", pady=(0, 16))
+        tk.Frame(header, height=2, background=ACCENT).pack(fill=tk.X, pady=(13, 0))
 
     def show_library(self) -> None:
         self._clear_content()
@@ -303,6 +397,7 @@ class UnityScraperDesktop:
             search_row,
             text="Search",
             command=self.refresh_library,
+            style="Accent.TButton",
         ).grid(row=0, column=1, padx=(8, 0))
         ttk.Button(
             search_row,
@@ -512,7 +607,7 @@ class UnityScraperDesktop:
             text="Enter one or more 8-character hexadecimal TitleIDs:",
         ).grid(row=0, column=0, sticky=tk.W)
 
-        self.add_titleids_text = tk.Text(panel, height=8, wrap=tk.WORD)
+        self.add_titleids_text = tk.Text(panel, height=8, wrap=tk.WORD, background="#070b08", foreground=TEXT, insertbackground=ACCENT, selectbackground="#315f12", selectforeground=TEXT, relief=tk.FLAT, highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT)
         self.add_titleids_text.grid(row=1, column=0, sticky="ew", pady=8)
 
         actions = ttk.Frame(panel)
@@ -643,7 +738,7 @@ class UnityScraperDesktop:
             command=self._run_health_scan,
         ).grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
 
-        self.health_text = tk.Text(panel, wrap=tk.WORD)
+        self.health_text = tk.Text(panel, wrap=tk.WORD, background="#070b08", foreground=TEXT, insertbackground=ACCENT, selectbackground="#315f12", selectforeground=TEXT, relief=tk.FLAT, highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT)
         self.health_text.grid(row=1, column=0, sticky="nsew")
         self.health_text.insert(
             tk.END,
