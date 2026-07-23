@@ -15,6 +15,8 @@ import tkinter as tk
 import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+
+from PIL import Image, ImageTk
 from typing import Any
 
 from app_paths import (
@@ -49,6 +51,105 @@ def _open_path(path: Path) -> None:
         subprocess.Popen(["open", str(path)])
     else:
         subprocess.Popen(["xdg-open", str(path)])
+
+
+
+class ResponsiveBackgroundBanner(ttk.Frame):
+    """Responsive, center-cropped image banner for application pages."""
+
+    def __init__(
+        self,
+        parent: tk.Misc,
+        image_path: Path,
+        title: str,
+        subtitle: str,
+        height: int = 190,
+    ) -> None:
+        super().__init__(parent)
+        self.image_path = image_path
+        self.title = title
+        self.subtitle = subtitle
+        self.banner_height = height
+        self._source_image: Image.Image | None = None
+        self._photo: ImageTk.PhotoImage | None = None
+        self._resize_job: str | None = None
+
+        self.canvas = tk.Canvas(
+            self,
+            height=self.banner_height,
+            highlightthickness=0,
+            borderwidth=0,
+            background="#0b0f0d",
+        )
+        self.canvas.pack(fill=tk.X, expand=True)
+
+        if self.image_path.exists():
+            try:
+                self._source_image = Image.open(self.image_path).convert("RGB")
+            except OSError:
+                self._source_image = None
+
+        self.bind("<Configure>", self._queue_redraw)
+        self.canvas.bind("<Configure>", self._queue_redraw)
+        self.after_idle(self._redraw)
+
+    def _queue_redraw(self, _event: tk.Event[Any] | None = None) -> None:
+        if self._resize_job is not None:
+            self.after_cancel(self._resize_job)
+        self._resize_job = self.after(60, self._redraw)
+
+    def _redraw(self) -> None:
+        self._resize_job = None
+        width = max(self.canvas.winfo_width(), 640)
+        height = self.banner_height
+        self.canvas.delete("all")
+
+        if self._source_image is not None:
+            image = self._cover_resize(self._source_image, width, height)
+            overlay = Image.new("RGB", image.size, "#050807")
+            image = Image.blend(image, overlay, 0.28)
+            self._photo = ImageTk.PhotoImage(image)
+            self.canvas.create_image(0, 0, image=self._photo, anchor=tk.NW)
+        else:
+            self.canvas.create_rectangle(
+                0, 0, width, height, fill="#0b0f0d", outline=""
+            )
+
+        self.canvas.create_rectangle(
+            0, height - 5, width, height, fill="#5bd600", outline=""
+        )
+        self.canvas.create_text(
+            28,
+            54,
+            text=self.title,
+            anchor=tk.W,
+            fill="#ffffff",
+            font=("Segoe UI", 23, "bold"),
+        )
+        self.canvas.create_text(
+            30,
+            94,
+            text=self.subtitle,
+            anchor=tk.W,
+            fill="#d6e6d3",
+            width=max(width - 60, 300),
+            font=("Segoe UI", 11),
+        )
+
+    @staticmethod
+    def _cover_resize(image: Image.Image, width: int, height: int) -> Image.Image:
+        source_width, source_height = image.size
+        scale = max(width / source_width, height / source_height)
+        resized = image.resize(
+            (
+                max(1, round(source_width * scale)),
+                max(1, round(source_height * scale)),
+            ),
+            Image.Resampling.LANCZOS,
+        )
+        left = max(0, (resized.width - width) // 2)
+        top = max(0, (resized.height - height) // 2)
+        return resized.crop((left, top, left + width, top + height))
 
 
 class UnityScraperDesktop:
@@ -141,16 +242,18 @@ class UnityScraperDesktop:
             child.destroy()
 
     def _page_header(self, title: str, subtitle: str) -> None:
-        header = ttk.Frame(self.content)
+        background = resource_path(
+            "assets",
+            "backgrounds",
+            "unityscraper_xbox_background.png",
+        )
+        header = ResponsiveBackgroundBanner(
+            self.content,
+            image_path=background,
+            title=title,
+            subtitle=subtitle,
+        )
         header.grid(row=0, column=0, sticky="ew", pady=(0, 16))
-        header.columnconfigure(0, weight=1)
-
-        ttk.Label(header, text=title, style="Header.TLabel").grid(
-            row=0, column=0, sticky=tk.W
-        )
-        ttk.Label(header, text=subtitle, style="Subheader.TLabel").grid(
-            row=1, column=0, sticky=tk.W, pady=(4, 0)
-        )
 
     def show_library(self) -> None:
         self._clear_content()
