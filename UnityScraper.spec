@@ -7,6 +7,9 @@ a = Analysis(
     binaries=[],
     datas=[('JSON.txt', '.'), ('VERSION', '.'), ('assets', 'assets')],
     hiddenimports=[
+        'backup_gui',
+        'backup_manager',
+        'backup_service',
         'consolemods_adapters',
         'dat_adapters',
         'knowledge_gui',

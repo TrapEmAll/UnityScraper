@@ -33,6 +33,8 @@ from app_paths import (
     resource_path,
 )
 from app_version import DISPLAY_VERSION
+from backup_gui import BackupPage
+from backup_service import BackupService
 from database import DatabaseManager
 from diagnostics import create_diagnostics_bundle
 from knowledge_service import KnowledgeService
@@ -180,6 +182,7 @@ class UnityScraperDesktop:
         self.root = root
         self.library = LibraryService()
         self.knowledge = KnowledgeService()
+        self.backups = BackupService()
         self.database = DatabaseManager()
         self.current_game: str | None = None
 
@@ -303,6 +306,7 @@ class UnityScraperDesktop:
             ("LIBRARY", self.show_library),
             ("ADD GAMES", self.show_add_games),
             ("DOWNLOADS", self.show_downloads),
+            ("BACKUP MANAGER", self.show_backups),
             ("KNOWLEDGE", self.show_knowledge),
             ("ARCHIVE HEALTH", self.show_health),
             ("SETTINGS", self.show_settings),
@@ -351,6 +355,15 @@ class UnityScraperDesktop:
     def _clear_content(self) -> None:
         for child in self.content.winfo_children():
             child.destroy()
+
+    def show_backups(self) -> None:
+        self._clear_content()
+        self.backup_page = BackupPage(
+            self.root,
+            self.content,
+            self.backups,
+            self._page_header,
+        )
 
     def _page_header(self, title: str, subtitle: str) -> None:
         header = ttk.Frame(self.content, style="Content.TFrame")

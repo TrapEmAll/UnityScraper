@@ -8,6 +8,7 @@ import tempfile
 import shutil
 import json
 import time
+import zipfile
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 import requests
@@ -26,6 +27,20 @@ from dat_adapters import parse_dat
 from knowledge_service import KnowledgeService
 from knowledge_sources import KnowledgeImportService, SourceInfo
 from wiki_adapters import extract_article_text, parse_sitemap
+from backup_manager import (
+    BackupItem,
+    FtpBackupClient,
+    FtpTarget,
+    InvalidPackageError,
+    UnsafeArchiveError,
+    atomic_copy,
+    import_stfs_zip,
+    inspect_stfs,
+    inspect_xbe,
+    package_destination,
+    scan_local_target,
+)
+from backup_service import BackupRepository
 
 
 class TestConfig(unittest.TestCase):
@@ -199,6 +214,24 @@ class TestDatabaseManager(unittest.TestCase):
                 """
             ).fetchone()
         self.assertIsNotNone(row)
+
+    def test_backup_schema_initialization(self):
+        """Test additive backup inventory and operation tables are created."""
+        expected = {
+            "backup_targets",
+            "backup_scans",
+            "backup_inventory",
+            "backup_operations",
+        }
+        with self.db.get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE type = 'table' AND name LIKE 'backup_%'
+                """
+            ).fetchall()
+        self.assertTrue(expected.issubset({row["name"] for row in rows}))
     
     def test_add_titleid(self):
         """Test adding TitleID"""
@@ -625,6 +658,176 @@ class TestIntegration(unittest.TestCase):
         self.assertTrue(export_file.exists())
 
 
+class TestBackupManager(unittest.TestCase):
+    """Test local Xbox backup inspection and safe transfer behavior."""
+
+    def setUp(self):
+        self.temp_dir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir)
+
+    def _stfs(
+        self,
+        name="package.bin",
+        titleid="4D5307E6",
+        mediaid="12345678",
+        content_type=0x000D0000,
+        title="Test Game",
+    ):
+        path = self.temp_dir / name
+        header = bytearray(0x1791)
+        header[:4] = b"LIVE"
+        header[0x344:0x348] = content_type.to_bytes(4, "big")
+        header[0x354:0x358] = bytes.fromhex(mediaid)
+        header[0x360:0x364] = bytes.fromhex(titleid)
+        header[0x366] = 1
+        header[0x367] = 1
+        encoded = title.encode("utf-16-be")
+        header[0x411:0x411 + len(encoded)] = encoded
+        header[0x1691:0x1691 + len(encoded)] = encoded
+        path.write_bytes(header + b"payload")
+        return path
+
+    def test_inspect_stfs_and_destination(self):
+        package = inspect_stfs(self._stfs())
+        self.assertEqual(package.title_id, "4D5307E6")
+        self.assertEqual(package.media_id, "12345678")
+        self.assertEqual(package.content_label, "Xbox Live Arcade")
+        destination = package_destination(package, self.temp_dir / "target")
+        self.assertIn("000D0000", destination.parts)
+        self.assertEqual(destination.parent.parent.name, "4D5307E6")
+
+    def test_rejects_unknown_stfs_content_type(self):
+        with self.assertRaises(InvalidPackageError):
+            inspect_stfs(self._stfs(content_type=0xDEADBEEF))
+
+    def test_atomic_copy_verifies_and_publishes(self):
+        source = self.temp_dir / "source.bin"
+        source.write_bytes(b"xbox" * 1000)
+        destination = self.temp_dir / "out" / "destination.bin"
+        result = atomic_copy(source, destination)
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(source.read_bytes(), destination.read_bytes())
+        self.assertFalse(destination.with_name("destination.bin.partial").exists())
+
+    def test_zip_import_rejects_traversal(self):
+        archive = self.temp_dir / "unsafe.zip"
+        with zipfile.ZipFile(archive, "w") as handle:
+            handle.writestr("../escape.bin", b"unsafe")
+        with self.assertRaises(UnsafeArchiveError):
+            import_stfs_zip(archive, self.temp_dir / "target")
+
+    def test_zip_import_installs_package(self):
+        package = self._stfs()
+        archive = self.temp_dir / "packages.zip"
+        with zipfile.ZipFile(archive, "w") as handle:
+            handle.write(package, "nested/game")
+        results = import_stfs_zip(archive, self.temp_dir / "target")
+        self.assertEqual(len(results), 1)
+        self.assertTrue(Path(results[0].destination).is_file())
+
+    def test_zip_import_preserves_validated_content_tree(self):
+        archive = self.temp_dir / "god.zip"
+        with zipfile.ZipFile(archive, "w") as handle:
+            handle.writestr(
+                "Content/0000000000000000/4D5307E6/00007000/12345678",
+                b"god-header",
+            )
+            handle.writestr(
+                "Content/0000000000000000/4D5307E6/00007000/"
+                "12345678.data/Data0000",
+                b"god-chunk",
+            )
+            handle.writestr(
+                "Content/0000000000000000/4D5307E6/DEADBEEF/ignored",
+                b"unknown",
+            )
+        target = self.temp_dir / "target"
+        results = import_stfs_zip(archive, target)
+        self.assertEqual(len(results), 2)
+        base = target / "Content" / "0000000000000000" / "4D5307E6"
+        self.assertEqual(
+            (base / "00007000" / "12345678.data" / "Data0000").read_bytes(),
+            b"god-chunk",
+        )
+        self.assertFalse((base / "DEADBEEF" / "ignored").exists())
+
+    def test_scan_detects_base_game_and_orphan_support_content(self):
+        content = self.temp_dir / "Content" / "0000000000000000"
+        base = content / "4D5307E6" / "00007000"
+        orphan = content / "555308C5" / "000B0000"
+        base.mkdir(parents=True)
+        orphan.mkdir(parents=True)
+        (base / "12345678").write_bytes(b"header")
+        (orphan / "update").write_bytes(b"update")
+        result = scan_local_target(self.temp_dir, lambda value: f"Game {value}")
+        statuses = {item.title_id: item.status for item in result.items}
+        self.assertEqual(statuses["4D5307E6"], "ready")
+        self.assertEqual(statuses["555308C5"], "incomplete")
+        self.assertEqual(len(result.warnings), 1)
+
+    def test_inspect_xbe_certificate(self):
+        path = self.temp_dir / "default.xbe"
+        data = bytearray(0x300)
+        data[:4] = b"XBEH"
+        base = 0x10000
+        certificate_offset = 0x180
+        data[0x104:0x108] = base.to_bytes(4, "little")
+        data[0x118:0x11C] = (base + certificate_offset).to_bytes(4, "little")
+        data[certificate_offset + 0x8:certificate_offset + 0xC] = (
+            0x4D530064
+        ).to_bytes(4, "little")
+        title = "Original Game".encode("utf-16-le")
+        start = certificate_offset + 0xC
+        data[start:start + len(title)] = title
+        path.write_bytes(data)
+        package = inspect_xbe(path)
+        self.assertEqual(package.title_id, "4D530064")
+        self.assertEqual(package.title_name, "Original Game")
+
+    def test_backup_schema_is_additive_and_omits_passwords(self):
+        repository = BackupRepository(self.temp_dir / "backup.db")
+        repository.save_ftp_target(
+            "Console",
+            FtpTarget(host="192.0.2.10", password="do-not-store"),
+        )
+        rows = repository.list_targets()
+        self.assertEqual(len(rows), 1)
+        self.assertNotIn("do-not-store", rows[0]["settings_json"])
+
+    def test_ftp_upload_skips_existing_remote_package(self):
+        package = self._stfs()
+
+        class FakeFtp:
+            stored = False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def mkd(self, _path):
+                return None
+
+            def voidcmd(self, _command):
+                return "200"
+
+            def size(self, _path):
+                return 100
+
+            def storbinary(self, *_args, **_kwargs):
+                self.stored = True
+
+        fake = FakeFtp()
+        client = FtpBackupClient(FtpTarget(host="192.0.2.10"))
+        with patch.object(client, "_connect", return_value=fake):
+            result = client.upload_stfs(package)
+        self.assertEqual(result.status, "skipped")
+        self.assertFalse(fake.stored)
+
+
 def run_tests():
     """Run all tests"""
     # Create test suite
@@ -642,6 +845,7 @@ def run_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestResumableDownloader))
     suite.addTests(loader.loadTestsFromTestCase(TestBatchDownloadManager))
     suite.addTests(loader.loadTestsFromTestCase(TestIntegration))
+    suite.addTests(loader.loadTestsFromTestCase(TestBackupManager))
     
     # Run tests
     runner = unittest.TextTestRunner(verbosity=2)

@@ -1,11 +1,15 @@
 {
-  "version": "0.9.0b1",
-  "name": "Xbox 360 Knowledge Foundation",
+  "version": "0.10.0b1",
+  "name": "Xbox 360 Knowledge and Backup Manager",
   "changes": [
     "Unified Xbox 360 knowledge browser",
     "ConsoleMods, XenonLibrary, and Free60 wiki ingestion",
     "Redump and No-Intro DAT imports",
-    "Source provenance and conflict review"
+    "Source provenance and conflict review",
+    "Local Xbox content and Games folder inventory",
+    "Safe STFS package and ZIP installation",
+    "Verified exports with preservation manifests",
+    "FTP console transfer and external ISO converter support"
   ],
   "download_url": "https://github.com/TrapEmAll/UnityScraper/releases",
   "release_date": "2026-07-23"

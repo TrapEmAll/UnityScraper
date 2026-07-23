@@ -1,0 +1,708 @@
+"""Xbox 360 backup discovery, package installation, verification, and transfer."""
+
+from __future__ import annotations
+
+import ftplib
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+import time
+import zipfile
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path, PurePosixPath
+from typing import Callable, Iterable, Iterator, Optional
+
+
+STFS_MAGICS = {b"CON ", b"LIVE", b"PIRS"}
+CONTENT_TYPES = {
+    0x00000002: ("DLC", "00000002"),
+    0x00005000: ("Original Xbox Game", "00005000"),
+    0x00007000: ("Xbox 360 Game", "00007000"),
+    0x000B0000: ("Title Update", "000B0000"),
+    0x000D0000: ("Xbox Live Arcade", "000D0000"),
+}
+GAME_CONTENT_DIRECTORIES = {"00005000", "00007000", "000D0000"}
+SUPPORT_CONTENT_DIRECTORIES = {"00000002", "000B0000"}
+HEX8_RE = re.compile(r"^[0-9A-Fa-f]{8}$")
+FOLDER_TITLE_ID_RE = re.compile(r"\[([0-9A-Fa-f]{8})\]\s*$")
+COPY_CHUNK = 1024 * 1024
+MAX_ARCHIVE_FILES = 200_000
+MAX_ARCHIVE_EXPANDED_SIZE = 128 * 1024 * 1024 * 1024
+FATX_INVALID_RE = re.compile(r'[<>:"/\\|?*]')
+
+
+class BackupError(RuntimeError):
+    """Base error for backup operations."""
+
+
+class InvalidPackageError(BackupError):
+    """Raised when a file is not a supported Xbox package."""
+
+
+class UnsafeArchiveError(BackupError):
+    """Raised when an archive attempts to escape its extraction directory."""
+
+
+class ConflictError(BackupError):
+    """Raised when a destination conflict cannot be resolved automatically."""
+
+
+@dataclass(frozen=True)
+class StfsPackage:
+    path: Path
+    magic: str
+    content_type: int
+    content_label: str
+    content_directory: str
+    title_id: str
+    media_id: str
+    disc_number: int
+    disc_count: int
+    display_name: str
+    title_name: str
+    size: int
+
+
+@dataclass(frozen=True)
+class XbePackage:
+    path: Path
+    title_id: str
+    title_name: str
+    size: int
+
+
+@dataclass
+class BackupItem:
+    path: Path
+    title_id: str
+    name: str
+    format: str
+    size: int
+    media_id: str = ""
+    content_type: str = ""
+    status: str = "ready"
+    notes: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        result = asdict(self)
+        result["path"] = str(self.path)
+        return result
+
+
+@dataclass
+class ScanResult:
+    root: Path
+    items: list[BackupItem]
+    warnings: list[str]
+    scanned_at: str
+
+    @property
+    def total_size(self) -> int:
+        return sum(item.size for item in self.items)
+
+    def to_dict(self) -> dict:
+        return {
+            "root": str(self.root),
+            "scanned_at": self.scanned_at,
+            "total_size": self.total_size,
+            "warnings": self.warnings,
+            "items": [item.to_dict() for item in self.items],
+        }
+
+
+@dataclass(frozen=True)
+class TransferResult:
+    source: str
+    destination: str
+    bytes_copied: int
+    sha256: str
+    status: str
+
+
+@dataclass(frozen=True)
+class FtpTarget:
+    host: str
+    port: int = 21
+    username: str = "xbox"
+    password: str = "xbox"
+    content_root: str = "/Hdd1/Content/0000000000000000"
+    games_root: str = "/Hdd1/Games"
+    timeout: float = 20.0
+
+
+def _read_utf16be(data: bytes) -> str:
+    return data.decode("utf-16-be", errors="ignore").split("\x00", 1)[0].strip()
+
+
+def inspect_stfs(path: str | Path) -> StfsPackage:
+    """Read public STFS header fields without extracting package contents."""
+    package_path = Path(path)
+    with package_path.open("rb") as handle:
+        header = handle.read(0x1791)
+    if len(header) < 0x1791 or header[:4] not in STFS_MAGICS:
+        raise InvalidPackageError(f"{package_path.name} is not a supported STFS package")
+
+    content_type = int.from_bytes(header[0x344:0x348], "big")
+    content = CONTENT_TYPES.get(content_type)
+    if content is None:
+        raise InvalidPackageError(
+            f"Unsupported STFS content type 0x{content_type:08X}"
+        )
+    title_id = header[0x360:0x364].hex().upper()
+    if not HEX8_RE.fullmatch(title_id) or title_id == "00000000":
+        raise InvalidPackageError("STFS package does not contain a usable TitleID")
+
+    return StfsPackage(
+        path=package_path,
+        magic=header[:4].decode("ascii").strip(),
+        content_type=content_type,
+        content_label=content[0],
+        content_directory=content[1],
+        title_id=title_id,
+        media_id=header[0x354:0x358].hex().upper(),
+        disc_number=header[0x366],
+        disc_count=header[0x367],
+        display_name=_read_utf16be(header[0x411:0x511]),
+        title_name=_read_utf16be(header[0x1691:0x1791]),
+        size=package_path.stat().st_size,
+    )
+
+
+def inspect_xbe(path: str | Path) -> XbePackage:
+    """Read TitleID and title from an original Xbox executable certificate."""
+    package_path = Path(path)
+    with package_path.open("rb") as handle:
+        header = handle.read(0x11C)
+        if len(header) < 0x11C or header[:4] != b"XBEH":
+            raise InvalidPackageError(f"{package_path.name} is not an XBE executable")
+        base_address = int.from_bytes(header[0x104:0x108], "little")
+        certificate_address = int.from_bytes(header[0x118:0x11C], "little")
+        certificate_offset = certificate_address - base_address
+        if certificate_offset < 0:
+            raise InvalidPackageError("XBE certificate address is invalid")
+        handle.seek(certificate_offset)
+        certificate = handle.read(0xD0)
+    if len(certificate) < 0xD0:
+        raise InvalidPackageError("XBE certificate is incomplete")
+    title_id = f"{int.from_bytes(certificate[0x8:0xC], 'little'):08X}"
+    title_name = certificate[0xC:0x5C].decode("utf-16-le", errors="ignore")
+    title_name = title_name.split("\x00", 1)[0].strip()
+    return XbePackage(package_path, title_id, title_name, package_path.stat().st_size)
+
+
+def sha256_file(path: str | Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(COPY_CHUNK), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def sha1_file(path: str | Path) -> str:
+    digest = hashlib.sha1()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(COPY_CHUNK), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def directory_size(path: Path) -> int:
+    total = 0
+    for child in path.rglob("*"):
+        try:
+            if child.is_file():
+                total += child.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def _content_root(root: Path) -> Path:
+    nested = root / "Content" / "0000000000000000"
+    return nested if nested.exists() else root
+
+
+def scan_local_target(
+    root: str | Path,
+    title_lookup: Optional[Callable[[str], Optional[str]]] = None,
+) -> ScanResult:
+    """Inventory a console content root, USB drive, or archive directory."""
+    target = Path(root).expanduser().resolve()
+    if not target.is_dir():
+        raise BackupError(f"Backup target does not exist: {target}")
+
+    items: list[BackupItem] = []
+    warnings: list[str] = []
+    content_root = _content_root(target)
+    if content_root.is_dir():
+        for title_dir in sorted(content_root.iterdir()):
+            if not title_dir.is_dir() or not HEX8_RE.fullmatch(title_dir.name):
+                continue
+            title_id = title_dir.name.upper()
+            types = {
+                child.name.upper()
+                for child in title_dir.iterdir()
+                if child.is_dir() and HEX8_RE.fullmatch(child.name)
+            }
+            game_types = sorted(types & GAME_CONTENT_DIRECTORIES)
+            support_types = sorted(types & SUPPORT_CONTENT_DIRECTORIES)
+            status = "ready" if game_types else "incomplete"
+            notes = []
+            package_names: list[str] = []
+            media_ids: set[str] = set()
+            malformed = 0
+            for type_name in sorted(types & set(CONTENT_TYPES[value][1] for value in CONTENT_TYPES)):
+                for package_path in (title_dir / type_name).iterdir():
+                    if not package_path.is_file() or package_path.name.endswith(".partial"):
+                        continue
+                    try:
+                        package = inspect_stfs(package_path)
+                    except (InvalidPackageError, OSError):
+                        malformed += 1
+                        continue
+                    if package.media_id and package.media_id != "00000000":
+                        media_ids.add(package.media_id)
+                    candidate_name = package.title_name or package.display_name
+                    if candidate_name:
+                        package_names.append(candidate_name)
+            if support_types and not game_types:
+                notes.append("Only add-on or update content was found")
+                warnings.append(f"{title_id} has support content but no base game")
+            if malformed:
+                notes.append(f"{malformed} package header(s) could not be identified")
+            name = title_lookup(title_id) if title_lookup else None
+            items.append(
+                BackupItem(
+                    path=title_dir,
+                    title_id=title_id,
+                    name=name or (package_names[0] if package_names else title_id),
+                    format=", ".join(game_types + support_types) or "Content",
+                    content_type=", ".join(
+                        CONTENT_TYPES[int(value, 16)][0]
+                        for value in game_types + support_types
+                        if int(value, 16) in CONTENT_TYPES
+                    ),
+                    media_id=", ".join(sorted(media_ids)),
+                    size=directory_size(title_dir),
+                    status=status,
+                    notes=notes,
+                )
+            )
+
+    games_root = target / "Games"
+    if games_root.is_dir():
+        for game_dir in sorted(child for child in games_root.iterdir() if child.is_dir()):
+            title_id = ""
+            title_name = game_dir.name
+            media_id = ""
+            format_name = "Extracted Xbox 360"
+            notes: list[str] = []
+            xbe = game_dir / "default.xbe"
+            xex = game_dir / "default.xex"
+            if xbe.is_file():
+                try:
+                    info = inspect_xbe(xbe)
+                    title_id, title_name = info.title_id, info.title_name or title_name
+                    format_name = "Extracted Original Xbox"
+                except BackupError as exc:
+                    notes.append(str(exc))
+            else:
+                folder_match = FOLDER_TITLE_ID_RE.search(game_dir.name)
+                if folder_match:
+                    title_id = folder_match.group(1).upper()
+                if not xex.is_file():
+                    notes.append("default.xex or default.xbe is missing")
+            if title_id and title_lookup:
+                title_name = title_lookup(title_id) or title_name
+            items.append(
+                BackupItem(
+                    path=game_dir,
+                    title_id=title_id,
+                    name=title_name,
+                    format=format_name,
+                    media_id=media_id,
+                    size=directory_size(game_dir),
+                    status="ready" if not notes else "incomplete",
+                    notes=notes,
+                )
+            )
+
+    if not items:
+        warnings.append("No Xbox 360 content or extracted games were found")
+    return ScanResult(
+        root=target,
+        items=items,
+        warnings=warnings,
+        scanned_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+def _package_filename(package: StfsPackage) -> str:
+    if package.content_directory == "000B0000":
+        return sha1_file(package.path).upper()
+    filename = package.path.name
+    if len(filename) > 42 or FATX_INVALID_RE.search(filename):
+        return sha1_file(package.path).upper()
+    return filename
+
+
+def package_destination(package: StfsPackage, target_root: str | Path) -> Path:
+    root = Path(target_root).expanduser().resolve()
+    content_root = target_content_root(root)
+    return (
+        content_root
+        / package.title_id
+        / package.content_directory
+        / _package_filename(package)
+    )
+
+
+def target_content_root(root: str | Path) -> Path:
+    """Resolve a drive root, Content folder, or direct common-content folder."""
+    target = Path(root).expanduser().resolve()
+    if target.name == "0000000000000000":
+        return target
+    if target.name.lower() == "content":
+        return target / "0000000000000000"
+    try:
+        if any(child.is_dir() and HEX8_RE.fullmatch(child.name) for child in target.iterdir()):
+            return target
+    except OSError:
+        pass
+    return target / "Content" / "0000000000000000"
+
+
+def atomic_copy(
+    source: str | Path,
+    destination: str | Path,
+    conflict: str = "skip",
+    progress: Optional[Callable[[int, int], None]] = None,
+) -> TransferResult:
+    """Copy a file through a partial path, verify it, then atomically publish it."""
+    source_path = Path(source).resolve()
+    destination_path = Path(destination).resolve()
+    if conflict not in {"skip", "replace", "error"}:
+        raise ValueError("conflict must be skip, replace, or error")
+    if destination_path.exists():
+        if conflict == "skip":
+            return TransferResult(
+                str(source_path), str(destination_path), 0, sha256_file(destination_path), "skipped"
+            )
+        if conflict == "error":
+            raise ConflictError(f"Destination already exists: {destination_path}")
+
+    destination_path.parent.mkdir(parents=True, exist_ok=True)
+    partial = destination_path.with_name(destination_path.name + ".partial")
+    source_size = source_path.stat().st_size
+    copied = 0
+    try:
+        with source_path.open("rb") as source_handle, partial.open("wb") as dest_handle:
+            while True:
+                chunk = source_handle.read(COPY_CHUNK)
+                if not chunk:
+                    break
+                dest_handle.write(chunk)
+                copied += len(chunk)
+                if progress:
+                    progress(copied, source_size)
+            dest_handle.flush()
+            os.fsync(dest_handle.fileno())
+        source_hash = sha256_file(source_path)
+        destination_hash = sha256_file(partial)
+        if source_hash != destination_hash:
+            raise BackupError("Copied file failed SHA-256 verification")
+        os.replace(partial, destination_path)
+        return TransferResult(
+            str(source_path), str(destination_path), copied, source_hash, "completed"
+        )
+    finally:
+        if partial.exists():
+            partial.unlink()
+
+
+def install_stfs_package(
+    source: str | Path,
+    target_root: str | Path,
+    conflict: str = "skip",
+    progress: Optional[Callable[[int, int], None]] = None,
+) -> TransferResult:
+    package = inspect_stfs(source)
+    return atomic_copy(
+        package.path,
+        package_destination(package, target_root),
+        conflict=conflict,
+        progress=progress,
+    )
+
+
+def _safe_zip_members(archive: zipfile.ZipFile, destination: Path) -> Iterator[zipfile.ZipInfo]:
+    base = destination.resolve()
+    members = archive.infolist()
+    if len(members) > MAX_ARCHIVE_FILES:
+        raise UnsafeArchiveError(
+            f"Archive contains more than {MAX_ARCHIVE_FILES:,} entries"
+        )
+    expanded_size = sum(member.file_size for member in members)
+    if expanded_size > MAX_ARCHIVE_EXPANDED_SIZE:
+        raise UnsafeArchiveError("Archive expanded size exceeds the safety limit")
+    for member in members:
+        member_path = Path(member.filename.replace("\\", "/"))
+        if member_path.is_absolute() or ".." in member_path.parts:
+            raise UnsafeArchiveError(f"Unsafe archive path: {member.filename}")
+        mode = member.external_attr >> 16
+        if mode and (mode & 0o170000) == 0o120000:
+            raise UnsafeArchiveError(f"Archive symlinks are not supported: {member.filename}")
+        resolved = (base / member_path).resolve()
+        try:
+            resolved.relative_to(base)
+        except ValueError as exc:
+            raise UnsafeArchiveError(f"Unsafe archive path: {member.filename}") from exc
+        yield member
+
+
+def import_stfs_zip(
+    archive_path: str | Path,
+    target_root: str | Path,
+    conflict: str = "skip",
+) -> list[TransferResult]:
+    """Safely extract and install supported STFS packages from a ZIP archive."""
+    results: list[TransferResult] = []
+    with tempfile.TemporaryDirectory(prefix="unityscraper-import-") as temporary:
+        destination = Path(temporary)
+        with zipfile.ZipFile(archive_path) as archive:
+            members = list(_safe_zip_members(archive, destination))
+            archive.extractall(destination, members=members)
+        copied_sources: set[Path] = set()
+        target_content = target_content_root(target_root)
+        for common_root in _find_common_content_roots(destination):
+            for title_dir in common_root.iterdir():
+                if not title_dir.is_dir() or not HEX8_RE.fullmatch(title_dir.name):
+                    continue
+                for content_dir in title_dir.iterdir():
+                    type_name = content_dir.name.upper()
+                    if (
+                        not content_dir.is_dir()
+                        or not HEX8_RE.fullmatch(type_name)
+                        or int(type_name, 16) not in CONTENT_TYPES
+                    ):
+                        continue
+                    for source in sorted(
+                        path for path in content_dir.rglob("*") if path.is_file()
+                    ):
+                        relative = source.relative_to(common_root)
+                        results.append(
+                            atomic_copy(
+                                source,
+                                target_content / relative,
+                                conflict=conflict,
+                            )
+                        )
+                        copied_sources.add(source.resolve())
+        candidates = []
+        for path in destination.rglob("*"):
+            if not path.is_file() or path.resolve() in copied_sources:
+                continue
+            try:
+                candidates.append(inspect_stfs(path))
+            except (InvalidPackageError, OSError):
+                continue
+        if not candidates and not results:
+            raise InvalidPackageError("Archive contains no supported STFS packages")
+        for package in candidates:
+            results.append(
+                install_stfs_package(package.path, target_root, conflict=conflict)
+            )
+    return results
+
+
+def _find_common_content_roots(extracted: Path) -> list[Path]:
+    roots = []
+    for candidate in extracted.rglob("0000000000000000"):
+        if candidate.is_dir() and (
+            candidate.parent.name.lower() == "content" or candidate.parent == extracted
+        ):
+            roots.append(candidate)
+    if extracted.name == "0000000000000000":
+        roots.append(extracted)
+    unique = {path.resolve(): path for path in roots}
+    return list(unique.values())
+
+
+def export_backup_item(
+    item: BackupItem,
+    destination_root: str | Path,
+    conflict: str = "skip",
+) -> Path:
+    """Export an inventory item with a preservation manifest and file hashes."""
+    output_root = Path(destination_root).expanduser().resolve()
+    safe_name = re.sub(r'[<>:"/\\|?*]', "_", item.name).strip(" .") or item.title_id or "XboxGame"
+    destination = output_root / safe_name
+    if destination.exists():
+        if conflict == "skip":
+            return destination
+        if conflict == "error":
+            raise ConflictError(f"Export destination already exists: {destination}")
+        shutil.rmtree(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+    files = []
+    source_root = item.path
+    for source in sorted(path for path in source_root.rglob("*") if path.is_file()):
+        relative = source.relative_to(source_root)
+        result = atomic_copy(source, destination / relative, conflict="replace")
+        files.append(
+            {
+                "path": relative.as_posix(),
+                "size": source.stat().st_size,
+                "sha256": result.sha256,
+            }
+        )
+    manifest = {
+        "schema": 1,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "item": item.to_dict(),
+        "files": files,
+    }
+    (destination / "unityscraper-manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    return destination
+
+
+def verify_backup_item(item: BackupItem) -> list[str]:
+    issues = list(item.notes)
+    if not item.path.exists():
+        issues.append("Item path is missing")
+        return issues
+    for partial in item.path.rglob("*.partial"):
+        issues.append(f"Abandoned partial file: {partial}")
+    for data_dir in item.path.rglob("*.data"):
+        if data_dir.is_dir() and not any(data_dir.iterdir()):
+            issues.append(f"Empty GOD data directory: {data_dir}")
+    return issues
+
+
+class FtpBackupClient:
+    """Single-connection FTP client for user-configured console targets."""
+
+    def __init__(self, target: FtpTarget):
+        self.target = target
+
+    def _connect(self) -> ftplib.FTP:
+        ftp = ftplib.FTP()
+        ftp.connect(self.target.host, self.target.port, timeout=self.target.timeout)
+        ftp.login(self.target.username, self.target.password)
+        return ftp
+
+    def test_connection(self) -> str:
+        with self._connect() as ftp:
+            return ftp.getwelcome()
+
+    @staticmethod
+    def _mkdirs(ftp: ftplib.FTP, remote_directory: str) -> None:
+        current = PurePosixPath("/")
+        for part in PurePosixPath(remote_directory).parts:
+            if part == "/":
+                continue
+            current /= part
+            try:
+                ftp.mkd(str(current))
+            except ftplib.error_perm as exc:
+                if not str(exc).startswith("550"):
+                    raise
+
+    def upload_stfs(
+        self,
+        source: str | Path,
+        conflict: str = "skip",
+        progress: Optional[Callable[[int, int], None]] = None,
+    ) -> TransferResult:
+        if conflict not in {"skip", "replace", "error"}:
+            raise ValueError("conflict must be skip, replace, or error")
+        package = inspect_stfs(source)
+        remote = (
+            PurePosixPath(self.target.content_root)
+            / package.title_id
+            / package.content_directory
+            / _package_filename(package)
+        )
+        partial = PurePosixPath(str(remote) + ".partial")
+        source_path = Path(source)
+        total = source_path.stat().st_size
+        copied = 0
+
+        def callback(chunk: bytes) -> None:
+            nonlocal copied
+            copied += len(chunk)
+            if progress:
+                progress(copied, total)
+
+        with self._connect() as ftp:
+            self._mkdirs(ftp, str(remote.parent))
+            remote_exists = False
+            try:
+                ftp.voidcmd("TYPE I")
+                ftp.size(str(remote))
+                remote_exists = True
+            except ftplib.error_perm:
+                remote_exists = False
+            if remote_exists and conflict == "skip":
+                return TransferResult(
+                    str(source_path),
+                    str(remote),
+                    0,
+                    sha256_file(source_path),
+                    "skipped",
+                )
+            if remote_exists and conflict == "error":
+                raise ConflictError(f"Remote destination already exists: {remote}")
+            with source_path.open("rb") as handle:
+                ftp.storbinary(f"STOR {partial}", handle, blocksize=64 * 1024, callback=callback)
+            if remote_exists:
+                ftp.delete(str(remote))
+            ftp.rename(str(partial), str(remote))
+        return TransferResult(
+            str(source_path),
+            str(remote),
+            copied,
+            sha256_file(source_path),
+            "completed",
+        )
+
+
+class ExternalConverter:
+    """Runs an explicitly configured external converter for user-owned images."""
+
+    def __init__(self, executable: str | Path, argument_template: Iterable[str]):
+        self.executable = Path(executable).expanduser().resolve()
+        self.argument_template = tuple(argument_template)
+        if not self.executable.is_file():
+            raise BackupError(f"Converter executable was not found: {self.executable}")
+
+    def convert(
+        self,
+        source_iso: str | Path,
+        output_directory: str | Path,
+        timeout: float = 3600,
+    ) -> subprocess.CompletedProcess[str]:
+        source = Path(source_iso).expanduser().resolve()
+        output = Path(output_directory).expanduser().resolve()
+        if source.suffix.lower() != ".iso" or not source.is_file():
+            raise BackupError("Converter input must be an existing ISO file")
+        output.mkdir(parents=True, exist_ok=True)
+        arguments = [
+            value.replace("{input}", str(source)).replace("{output}", str(output))
+            for value in self.argument_template
+        ]
+        return subprocess.run(
+            [str(self.executable), *arguments],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )

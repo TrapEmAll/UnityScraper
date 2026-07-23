@@ -1,7 +1,7 @@
 # UnityScraper Project Status
 
-UnityScraper is an Xbox 360 library, title-update, artwork, archive-health, and
-source-attributed knowledge application.
+UnityScraper is an Xbox 360 library, title-update, artwork, archive-health,
+backup-management, and source-attributed knowledge application.
 
 ## Completed
 
@@ -22,12 +22,23 @@ source-attributed knowledge application.
   actions, and conflict review.
 - Windows packaging rules that include the full visual asset set and dynamically
   loaded knowledge adapters.
+- Local inventory for Xbox content roots, USB drives, archive folders, Games on
+  Demand, XBLA, DLC, title updates, and extracted Xbox/Xbox 360 games.
+- Public STFS and XBE header inspection for TitleID, MediaID, content type, disc,
+  and display metadata.
+- Safe bare-package and ZIP installation with path validation, `.partial`
+  staging, SHA-256 verification, and atomic final placement.
+- Verified archive export with portable JSON manifests and per-file checksums.
+- Aurora-oriented FTP package upload with one connection per operation,
+  temporary remote names, and no stored passwords.
+- Explicit external converter integration for user-owned ISO images.
 
 ## Validation
 
-- Unit tests cover scraper configuration, database behavior, ConsoleMods parsing,
+- Offline tests cover scraper configuration, database behavior, ConsoleMods parsing,
   DAT parsing, wiki parsing, knowledge search/provenance, downloads, queueing,
-  and an end-to-end local workflow.
+  STFS/XBE inspection, safe archives, backup scanning, atomic copies, and an
+  end-to-end local workflow.
 - Network-backed source syncs remain dependent on each source's availability and
   access policy. Cached copies are used when available.
 
@@ -40,10 +51,15 @@ source-attributed knowledge application.
   discarded.
 - Known local or XboxUnity title/publisher data is not replaced by fallback
   knowledge values.
+- ISO conversion remains an external-tool boundary. UnityScraper does not
+  implement copy-protection bypass or bundle third-party converter binaries.
+- Traditional FTP is intended for trusted local networks. Passwords are kept in
+  memory and omitted from database records.
 
 ## Future Work
 
-- Parse user-owned XEX and STFS files and link their identifiers to knowledge
-  entities.
+- Parse additional XEX fields and link scanned file identifiers directly to
+  normalized knowledge entities.
 - Add field-specific source-priority controls and conflict resolution actions.
 - Add optional scheduled knowledge refreshes and offline HTML reports.
+- Add resumable FTP queues and optional Aurora database inventory.
