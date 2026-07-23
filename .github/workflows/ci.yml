@@ -48,6 +48,15 @@ jobs:
       - name: Run legacy integration tests
         run: python integration_tests.py
 
+      - name: Validate Linux shell scripts
+        if: runner.os == 'Linux'
+        run: |
+          sh -n setup.sh
+          sh -n run-unityscraper.sh
+          sh -n build_linux.sh
+          sh -n packaging/linux/install.sh
+          sh -n packaging/linux/uninstall.sh
+
   windows-build:
     name: Windows executable
     runs-on: windows-latest
@@ -79,4 +88,51 @@ jobs:
           path: |
             dist/UnityScraper.exe
             dist/UnityScraper.exe.sha256
+          if-no-files-found: error
+
+  linux-build:
+    name: Linux executable
+    runs-on: ubuntu-22.04
+    needs: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install desktop build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y appstream desktop-file-utils python3-tk xvfb
+          python -m pip install -r requirements.txt pyinstaller
+
+      - name: Validate desktop metadata
+        run: |
+          sed -e 's|@EXEC@|/usr/bin/unityscraper|g' \
+              -e 's|@ICON@|io.github.trapemall.UnityScraper|g' \
+              packaging/linux/io.github.trapemall.UnityScraper.desktop \
+              > /tmp/io.github.trapemall.UnityScraper.desktop
+          desktop-file-validate /tmp/io.github.trapemall.UnityScraper.desktop
+          appstreamcli validate --no-net packaging/linux/io.github.trapemall.UnityScraper.metainfo.xml
+
+      - name: Build Linux bundle
+        run: ./build_linux.sh
+
+      - name: Smoke test graphical executable
+        run: |
+          set +e
+          xvfb-run -a timeout 8s dist/UnityScraper
+          status=$?
+          set -e
+          test "$status" -eq 124
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UnityScraper-Linux-x86_64
+          path: |
+            dist/UnityScraper-Linux-x86_64.tar.gz
+            dist/UnityScraper-Linux-x86_64.tar.gz.sha256
           if-no-files-found: error

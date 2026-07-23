@@ -12,7 +12,7 @@ from urllib.parse import quote
 
 import requests
 
-from app_paths import DATA_DIR, ensure_app_dirs
+from app_paths import CACHE_DIR, ensure_app_dirs
 from knowledge_base import EntityRecord, KnowledgeRepository, utc_now
 
 logger = logging.getLogger(__name__)
@@ -75,8 +75,11 @@ class CachedHttpClient:
         timeout: int = 30,
         session: requests.Session | None = None,
     ) -> None:
-        ensure_app_dirs()
-        self.cache_dir = Path(cache_dir) if cache_dir else DATA_DIR / "source_cache"
+        if cache_dir is None:
+            ensure_app_dirs()
+            self.cache_dir = CACHE_DIR / "source_documents"
+        else:
+            self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.rate_limit_seconds = rate_limit_seconds
         self.timeout = timeout

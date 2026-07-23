@@ -15,6 +15,10 @@ from app_paths import (
     ensure_app_dirs,
     ensure_user_titleids_file,
 )
+from platform_support import desktop_font_family
+
+
+UI_FONT = desktop_font_family()
 
 
 class SetupWizard(tk.Toplevel):
@@ -45,7 +49,7 @@ class SetupWizard(tk.Toplevel):
         ttk.Label(
             container,
             text="Set up your Xbox 360 archive",
-            font=("Segoe UI", 18, "bold"),
+            font=(UI_FONT, 18, "bold"),
         ).pack(anchor=tk.W)
 
         ttk.Label(

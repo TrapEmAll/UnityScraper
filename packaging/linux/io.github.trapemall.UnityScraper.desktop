@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=UnityScraper
+Comment=Xbox 360 library, knowledge, preservation, and backup manager
+Exec=@EXEC@
+Icon=@ICON@
+Terminal=false
+Categories=Utility;Game;
+Keywords=Xbox;Xbox 360;Title Update;Preservation;Backup;
+StartupNotify=true
+StartupWMClass=UnityScraper

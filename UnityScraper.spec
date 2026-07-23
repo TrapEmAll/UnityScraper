@@ -1,5 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import sys
+
+
+icon = 'assets/UnityScraper.ico' if sys.platform == 'win32' else None
 
 a = Analysis(
     ['desktop_app.py'],
@@ -45,5 +49,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['assets\\UnityScraper.ico'],
+    icon=icon,
 )

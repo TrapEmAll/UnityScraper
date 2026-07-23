@@ -7,6 +7,13 @@ Notable changes to UnityScraper are documented here. The project follows
 
 ### Added
 
+- Native Linux desktop support with XDG data, configuration, cache, and state
+  directories.
+- Linux x86_64 release bundle with user-level installation, application-menu
+  integration, AppStream metadata, and safe uninstallation.
+- Linux source setup, launcher, packaging script, platform tests, and dedicated
+  support documentation.
+- Parallel Windows and Linux CI artifacts and tag-driven release publishing.
 - Authenticated remote REST API mode and validated configuration updates.
 - Cross-platform CI with Windows executable smoke builds.
 - Tagged-release packaging with SHA-256 checksums.
@@ -14,6 +21,9 @@ Notable changes to UnityScraper are documented here. The project follows
 
 ### Changed
 
+- PyInstaller configuration and desktop entry point now support Windows and
+  Linux from the same source tree.
+- Knowledge source snapshots use the platform cache directory.
 - Repository-generated executables are published through releases and CI
   artifacts instead of being committed to source control.
 - Source checkouts use normal application storage unless the user creates a

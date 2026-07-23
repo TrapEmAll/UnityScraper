@@ -43,6 +43,94 @@ from backup_manager import (
 from backup_service import BackupRepository
 from api import UnityScraperAPI
 from app_version import DISPLAY_VERSION
+from app_paths import resolve_storage_paths
+from platform_support import desktop_font_family, path_opener_command
+
+
+class TestPlatformSupport(unittest.TestCase):
+    """Test cross-platform storage and desktop integration."""
+
+    def test_linux_uses_xdg_directories(self):
+        home = Path("/home/tester")
+        paths = resolve_storage_paths(
+            os_name="posix",
+            platform_name="linux",
+            environ={
+                "XDG_DATA_HOME": "/xdg/data",
+                "XDG_CONFIG_HOME": "/xdg/config",
+                "XDG_CACHE_HOME": "/xdg/cache",
+                "XDG_STATE_HOME": "/xdg/state",
+            },
+            home=home,
+        )
+
+        self.assertEqual(paths.base, Path("/xdg/data/unityscraper"))
+        self.assertEqual(paths.config, Path("/xdg/config/unityscraper"))
+        self.assertEqual(paths.cache, Path("/xdg/cache/unityscraper"))
+        self.assertEqual(paths.logs, Path("/xdg/state/unityscraper/logs"))
+
+    def test_linux_xdg_defaults_follow_home(self):
+        home = Path("/home/tester")
+        paths = resolve_storage_paths(
+            os_name="posix",
+            platform_name="linux",
+            environ={},
+            home=home,
+        )
+
+        self.assertEqual(paths.base, home / ".local/share/unityscraper")
+        self.assertEqual(paths.config, home / ".config/unityscraper")
+        self.assertEqual(paths.cache, home / ".cache/unityscraper")
+        self.assertEqual(paths.logs, home / ".local/state/unityscraper/logs")
+
+    def test_linux_ignores_relative_xdg_values(self):
+        home = Path("/home/tester")
+        paths = resolve_storage_paths(
+            os_name="posix",
+            platform_name="linux",
+            environ={"XDG_CONFIG_HOME": "relative/config"},
+            home=home,
+        )
+
+        self.assertEqual(paths.config, home / ".config/unityscraper")
+
+    def test_portable_mode_keeps_everything_together(self):
+        paths = resolve_storage_paths(portable_root=Path("/opt/unityscraper"))
+
+        self.assertEqual(paths.base, Path("/opt/unityscraper/UnityScraperData"))
+        self.assertEqual(paths.config, paths.base / "config")
+        self.assertEqual(paths.cache, paths.base / "cache")
+
+    def test_platform_openers(self):
+        self.assertIsNone(path_opener_command(os_name="nt", platform_name="win32"))
+        self.assertEqual(
+            path_opener_command(os_name="posix", platform_name="darwin"),
+            ["open"],
+        )
+        with patch("platform_support.shutil.which") as which:
+            which.side_effect = lambda command: "/usr/bin/gio" if command == "gio" else None
+            self.assertEqual(
+                path_opener_command(os_name="posix", platform_name="linux"),
+                ["gio", "open"],
+            )
+
+    def test_desktop_font_is_defined(self):
+        self.assertTrue(desktop_font_family())
+
+    def test_linux_desktop_metadata_is_complete(self):
+        desktop = Path("packaging/linux/io.github.trapemall.UnityScraper.desktop")
+        metadata = Path("packaging/linux/io.github.trapemall.UnityScraper.metainfo.xml")
+        self.assertIn("Type=Application", desktop.read_text(encoding="utf-8"))
+        self.assertIn("@EXEC@", desktop.read_text(encoding="utf-8"))
+
+        import xml.etree.ElementTree as element_tree
+
+        root = element_tree.parse(metadata).getroot()
+        self.assertEqual(root.attrib["type"], "desktop-application")
+        self.assertEqual(
+            root.findtext("id"),
+            "io.github.trapemall.UnityScraper",
+        )
 
 
 class TestConfig(unittest.TestCase):
@@ -926,8 +1014,9 @@ def run_tests():
     # Create test suite
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
-    
+
     # Add all test classes
+    suite.addTests(loader.loadTestsFromTestCase(TestPlatformSupport))
     suite.addTests(loader.loadTestsFromTestCase(TestConfig))
     suite.addTests(loader.loadTestsFromTestCase(TestRateLimiter))
     suite.addTests(loader.loadTestsFromTestCase(TestUnityScraper))

@@ -10,6 +10,8 @@
 - [Advanced Features](ADVANCED_FEATURES.md) - rate limits, resume, diagnostics,
   portable mode, API, and conversion
 - [REST API](API.md) - authentication, endpoints, configuration, and safety
+- [Linux Support](LINUX.md) - installation, XDG storage, desktop integration,
+  uninstallation, and troubleshooting
 - [Project Status](PROJECT_STATUS.md) - completed work, boundaries, and roadmap
 - [Changelog](CHANGELOG.md) - release history
 
@@ -35,4 +37,10 @@ Windows packaging:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\build_windows.ps1
+```
+
+Linux packaging:
+
+```bash
+./build_linux.sh
 ```

@@ -97,8 +97,11 @@ class BackupRepository:
     """Additive SQLite storage for targets, scans, inventory, and operations."""
 
     def __init__(self, db_path: str | Path = DATABASE_PATH):
-        ensure_app_dirs()
         self.db_path = Path(db_path)
+        if self.db_path == DATABASE_PATH:
+            ensure_app_dirs()
+        else:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.ensure_schema()
 
     @contextmanager
