@@ -1,38 +1,42 @@
-#!/bin/bash
-# Setup script for UnityScraper Enhanced
-# For Windows, save as setup.bat and replace first line with: @echo off
+@echo off
+setlocal
+cd /d "%~dp0"
 
-echo "================================"
-echo "UnityScraper Enhanced - Setup"
-echo "================================"
-echo ""
+echo ========================================
+echo UnityScraper Setup
+echo ========================================
+echo.
 
-# Check Python installation
-echo "Checking Python installation..."
-python --version
-if [ $? -ne 0 ]; then
-    echo "ERROR: Python not found. Please install Python 3.9 or higher."
-    exit 1
-fi
+where python >nul 2>nul
+if errorlevel 1 (
+    echo Python was not found on PATH.
+    echo Install Python 3.10 or newer, then run this file again.
+    exit /b 1
+)
 
-# Install requirements
-echo ""
-echo "Installing requirements..."
-pip install -r requirements.txt
+python -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"
+if errorlevel 1 (
+    echo UnityScraper requires Python 3.10 or newer.
+    python --version
+    exit /b 1
+)
 
-if [ $? -ne 0 ]; then
-    echo "ERROR: Failed to install requirements."
-    exit 1
-fi
+if not exist ".venv\Scripts\python.exe" (
+    echo Creating virtual environment...
+    python -m venv .venv
+    if errorlevel 1 exit /b 1
+)
 
-echo ""
-echo "================================"
-echo "Setup Complete!"
-echo "================================"
-echo ""
-echo "Quick Start:"
-echo "  CLI:  python main.py 555308C5"
-echo "  GUI:  python GUI.py"
-echo "  Test: python tests.py"
-echo ""
-echo "See README.md for full documentation."
+echo Installing runtime dependencies...
+".venv\Scripts\python.exe" -m pip install --upgrade pip
+if errorlevel 1 exit /b 1
+
+".venv\Scripts\python.exe" -m pip install -r requirements.txt
+if errorlevel 1 exit /b 1
+
+echo.
+echo Setup complete.
+echo Run UnityScraper with:
+echo   .venv\Scripts\python.exe desktop_app.py
+echo.
+endlocal

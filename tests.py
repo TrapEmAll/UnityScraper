@@ -41,6 +41,8 @@ from backup_manager import (
     scan_local_target,
 )
 from backup_service import BackupRepository
+from api import UnityScraperAPI
+from app_version import DISPLAY_VERSION
 
 
 class TestConfig(unittest.TestCase):
@@ -126,6 +128,13 @@ class TestRateLimiter(unittest.TestCase):
 
 class TestUnityScraper(unittest.TestCase):
     """Test main scraper functionality"""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.database = DatabaseManager(Path(self.temp_dir) / "scraper.db")
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir)
     
     def test_validate_titleid(self):
         """Test TitleID validation"""
@@ -145,7 +154,7 @@ class TestUnityScraper(unittest.TestCase):
         """Test scraper initialization"""
         mock_test.return_value = None
         config = Config()
-        scraper = UnityScraper(config)
+        scraper = UnityScraper(config, database=self.database)
         
         self.assertIsNotNone(scraper.session)
         self.assertIsNotNone(scraper.rate_limiter)
@@ -161,7 +170,7 @@ class TestUnityScraper(unittest.TestCase):
         
         config = Config()
         with patch.object(UnityScraper, '_test_connection'):
-            scraper = UnityScraper(config)
+            scraper = UnityScraper(config, database=self.database)
             response = scraper._make_request('http://test.com')
         
         self.assertIsNotNone(response)
@@ -178,7 +187,7 @@ class TestUnityScraper(unittest.TestCase):
         config.max_retries = 1
         
         with patch.object(UnityScraper, '_test_connection'):
-            scraper = UnityScraper(config)
+            scraper = UnityScraper(config, database=self.database)
             
             start = time.time()
             response = scraper._make_request('http://test.com')
@@ -711,6 +720,15 @@ class TestBackupManager(unittest.TestCase):
         self.assertEqual(source.read_bytes(), destination.read_bytes())
         self.assertFalse(destination.with_name("destination.bin.partial").exists())
 
+    def test_atomic_copy_reports_mismatched_existing_file_as_conflict(self):
+        source = self.temp_dir / "source.bin"
+        destination = self.temp_dir / "destination.bin"
+        source.write_bytes(b"new")
+        destination.write_bytes(b"existing")
+        result = atomic_copy(source, destination)
+        self.assertEqual(result.status, "conflict")
+        self.assertEqual(destination.read_bytes(), b"existing")
+
     def test_zip_import_rejects_traversal(self):
         archive = self.temp_dir / "unsafe.zip"
         with zipfile.ZipFile(archive, "w") as handle:
@@ -828,6 +846,81 @@ class TestBackupManager(unittest.TestCase):
         self.assertFalse(fake.stored)
 
 
+class TestRestAPI(unittest.TestCase):
+    """Test API authentication and configuration safety boundaries."""
+
+    def setUp(self):
+        class FakeConfig:
+            workers = 4
+            rate_limit = 0.35
+            timeout = 30
+            max_retries = 3
+            retry_backoff = 2.0
+            bandwidth_limit = 0
+            verify_checksums = False
+            dry_run = False
+            refresh_interval_days = 0
+            base_url = "http://xboxunity.net"
+            http_fallback_url = base_url
+            use_https = False
+
+        class FakeDatabase:
+            @staticmethod
+            def search_titleids(_query):
+                return []
+
+        class FakeScraper:
+            config = FakeConfig()
+            db = FakeDatabase()
+
+            @staticmethod
+            def validate_titleid(value):
+                value = value.upper()
+                if len(value) == 8 and all(
+                    character in "0123456789ABCDEF" for character in value
+                ):
+                    return value
+                return None
+
+        self.scraper = FakeScraper()
+
+    def test_remote_bind_requires_token(self):
+        with self.assertRaises(ValueError):
+            UnityScraperAPI(self.scraper, host="0.0.0.0")
+
+    def test_health_reports_current_version_without_token(self):
+        client = UnityScraperAPI(self.scraper, token="secret").app.test_client()
+        response = client.get("/api/health")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["version"], DISPLAY_VERSION)
+
+    def test_token_protects_non_health_routes(self):
+        client = UnityScraperAPI(self.scraper, token="secret").app.test_client()
+        self.assertEqual(client.get("/api/titleids").status_code, 401)
+        response = client.get(
+            "/api/titleids",
+            headers={"Authorization": "Bearer secret"},
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def test_config_rejects_unknown_and_https_keys(self):
+        client = UnityScraperAPI(self.scraper).app.test_client()
+        response = client.post("/api/config", json={"use_https": True})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Unsupported", response.get_json()["error"])
+
+    def test_config_validates_and_applies_allowlisted_values(self):
+        client = UnityScraperAPI(self.scraper).app.test_client()
+        response = client.post(
+            "/api/config",
+            json={"workers": 8, "rate_limit": 0.5},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.scraper.config.workers, 8)
+        self.assertEqual(self.scraper.config.rate_limit, 0.5)
+        self.assertFalse(self.scraper.config.use_https)
+
+
 def run_tests():
     """Run all tests"""
     # Create test suite
@@ -846,6 +939,7 @@ def run_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestBatchDownloadManager))
     suite.addTests(loader.loadTestsFromTestCase(TestIntegration))
     suite.addTests(loader.loadTestsFromTestCase(TestBackupManager))
+    suite.addTests(loader.loadTestsFromTestCase(TestRestAPI))
     
     # Run tests
     runner = unittest.TextTestRunner(verbosity=2)

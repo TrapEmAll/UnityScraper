@@ -228,7 +228,7 @@ class BackupPage:
             try:
                 result = operation()
             except Exception as exc:
-                self.root.after(0, lambda: self._failed(exc))
+                self.root.after(0, lambda error=exc: self._failed(error))
             else:
                 self.root.after(0, lambda: self._finished(result, done))
 

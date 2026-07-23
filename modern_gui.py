@@ -926,7 +926,9 @@ class UnityScraperDesktop:
         ttk.Label(
             panel,
             text=(
-                "Xbox 360 title-update, cover-art, and preservation manager.\n\n"
+                "Xbox 360 library, knowledge, update, artwork, and "
+                "backup manager.\n"
+                "Licensed under GPL-3.0-only.\n\n"
                 + describe_storage()
             ),
             justify=tk.LEFT,
@@ -941,6 +943,13 @@ class UnityScraperDesktop:
             panel,
             text="Open Application Data",
             command=lambda: _open_path(BASE_DIR),
+        ).pack(anchor=tk.W, pady=4)
+        ttk.Button(
+            panel,
+            text="Open Documentation",
+            command=lambda: webbrowser.open(
+                "https://github.com/TrapEmAll/UnityScraper#readme"
+            ),
         ).pack(anchor=tk.W, pady=4)
         ttk.Button(
             panel,

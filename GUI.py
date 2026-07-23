@@ -571,9 +571,9 @@ class UnityScraperGUI:
                 ))
             except Exception as e:
                 logging.error(f"Retry error: {e}")
-                self.root.after(0, lambda: messagebox.showerror(
+                self.root.after(0, lambda error=str(e): messagebox.showerror(
                     "Error", 
-                    f"Retry failed: {str(e)}"
+                    f"Retry failed: {error}"
                 ))
         
         thread = threading.Thread(target=retry, daemon=True)
@@ -620,9 +620,9 @@ class UnityScraperGUI:
                 ))
             except Exception as e:
                 logging.error(f"Export error: {e}")
-                self.root.after(0, lambda: messagebox.showerror(
+                self.root.after(0, lambda error=str(e): messagebox.showerror(
                     "Error", 
-                    f"Export failed: {str(e)}"
+                    f"Export failed: {error}"
                 ))
         
         thread = threading.Thread(target=export, daemon=True)
@@ -658,9 +658,9 @@ Most Scraped:
                 ))
             except Exception as e:
                 logging.error(f"Stats error: {e}")
-                self.root.after(0, lambda: messagebox.showerror(
+                self.root.after(0, lambda error=str(e): messagebox.showerror(
                     "Error", 
-                    f"Failed to get statistics: {str(e)}"
+                    f"Failed to get statistics: {error}"
                 ))
         
         thread = threading.Thread(target=get_stats, daemon=True)
@@ -704,9 +704,9 @@ Missing: {len(results['missing'])}
                 ))
             except Exception as e:
                 logging.error(f"Integrity check error: {e}")
-                self.root.after(0, lambda: messagebox.showerror(
+                self.root.after(0, lambda error=str(e): messagebox.showerror(
                     "Error",
-                    f"Integrity check failed: {str(e)}"
+                    f"Integrity check failed: {error}"
                 ))
         
         thread = threading.Thread(target=verify, daemon=True)
@@ -717,20 +717,10 @@ Missing: {len(results['missing'])}
         def check():
             try:
                 checker = VersionChecker()
-                update_info = checker.check_for_updates()
+                has_update, update_info = checker.check_for_updates()
                 
-                if update_info and update_info.get('new_version'):
-                    message = f"""
-New Version Available!
-
-Current: Unknown
-Latest: {update_info.get('version', 'Unknown')}
-
-Changes:
-{update_info.get('changes', 'No changelog available')}
-
-Download: {update_info.get('download_url', 'GitHub')}
-"""
+                if has_update and update_info:
+                    message = checker.format_update_message(update_info)
                     self.root.after(0, lambda: messagebox.showinfo(
                         "Update Available",
                         message
@@ -742,9 +732,9 @@ Download: {update_info.get('download_url', 'GitHub')}
                     ))
             except Exception as e:
                 logging.error(f"Update check error: {e}")
-                self.root.after(0, lambda: messagebox.showerror(
+                self.root.after(0, lambda error=str(e): messagebox.showerror(
                     "Error",
-                    f"Failed to check for updates: {str(e)}"
+                    f"Failed to check for updates: {error}"
                 ))
         
         thread = threading.Thread(target=check, daemon=True)
@@ -771,9 +761,9 @@ Failed: {queue_stats['failed']}
                 ))
             except Exception as e:
                 logging.error(f"Queue error: {e}")
-                self.root.after(0, lambda: messagebox.showerror(
+                self.root.after(0, lambda error=str(e): messagebox.showerror(
                     "Error",
-                    f"Failed to display queue: {str(e)}"
+                    f"Failed to display queue: {error}"
                 ))
         
         thread = threading.Thread(target=show_queue, daemon=True)
@@ -910,9 +900,9 @@ Failed: {queue_stats['failed']}
                 ))
         except Exception as e:
             logging.error(f"Metadata collection error: {e}")
-            self.root.after(0, lambda: messagebox.showerror(
+            self.root.after(0, lambda error=str(e): messagebox.showerror(
                 "Error",
-                f"Metadata collection failed: {str(e)}"
+                f"Metadata collection failed: {error}"
             ))
         finally:
             self.root.after(0, self.download_finished)
@@ -938,9 +928,9 @@ Failed: {queue_stats['failed']}
         
         except Exception as e:
             logging.error(f"Download error: {e}")
-            self.root.after(0, lambda: messagebox.showerror(
+            self.root.after(0, lambda error=str(e): messagebox.showerror(
                 "Error", 
-                f"Download failed: {str(e)}"
+                f"Download failed: {error}"
             ))
         
         finally:

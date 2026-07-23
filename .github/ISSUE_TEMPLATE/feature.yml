@@ -1,0 +1,31 @@
+name: Feature request
+description: Suggest a focused UnityScraper improvement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What workflow or community need is not handled well today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed experience
+      description: Describe the user-facing behavior, not only an implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: sources
+    attributes:
+      label: Sources or formats
+      description: Link public specifications and state relevant licenses.
+  - type: checkboxes
+    id: boundary
+    attributes:
+      label: Project boundary
+      options:
+        - label: This request does not require distributing game images, firmware, keys, leaked SDK files, or circumvention tooling.
+          required: true

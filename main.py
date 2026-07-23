@@ -31,18 +31,20 @@ from database import DatabaseManager
 from plugins import PluginManager
 from resume import ResumableDownloader
 
-ensure_app_dirs()
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler(CLI_LOG_PATH)
-    ]
-)
 logger = logging.getLogger(__name__)
+
+
+def configure_logging() -> None:
+    """Configure console and file logging when the CLI is actually launched."""
+    ensure_app_dirs()
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler(CLI_LOG_PATH),
+        ],
+    )
 
 
 class Config:
@@ -149,11 +151,15 @@ def load_titleids_from_json(json_file: str = None) -> List[str]:
 class UnityScraper:
     """Main scraper class for XboxUnity's HTTP endpoints."""
     
-    def __init__(self, config: Config):
+    def __init__(
+        self,
+        config: Config,
+        database: Optional[DatabaseManager] = None,
+    ):
         self.config = config
         self.rate_limiter = RateLimiter(config.rate_limit)
         self.session = self._create_session()
-        self.db = DatabaseManager()  # Initialize database
+        self.db = database or DatabaseManager()
         self.plugin_manager = PluginManager()  # Initialize plugin system
         self.downloader = ResumableDownloader(self.session, config.timeout, config.bandwidth_limit)
         self._test_connection()
@@ -643,6 +649,7 @@ class UnityScraper:
 
 
 def main():
+    configure_logging()
     parser = argparse.ArgumentParser(
         description='UnityScraper - Download Xbox 360 content from XboxUnity',
         formatter_class=argparse.RawDescriptionHelpFormatter
@@ -776,6 +783,15 @@ def main():
         help='API server host (default: 127.0.0.1)'
     )
     parser.add_argument(
+        '--api-token',
+        type=str,
+        default=None,
+        help=(
+            'API authentication token; prefer the UNITYSCRAPER_API_TOKEN '
+            'environment variable'
+        )
+    )
+    parser.add_argument(
         '--sync-knowledge',
         action='store_true',
         help='Import ConsoleMods knowledge data and enrich unknown library metadata'
@@ -877,7 +893,12 @@ def main():
         try:
             from api import UnityScraperAPI
             scraper = UnityScraper(config)
-            api = UnityScraperAPI(scraper, port=args.api_port, host=args.api_host)
+            api = UnityScraperAPI(
+                scraper,
+                port=args.api_port,
+                host=args.api_host,
+                token=args.api_token,
+            )
             logger.info(f"Starting API server on {args.api_host}:{args.api_port}")
             logger.info("API documentation available at http://<host>:<port>/api/")
             api.run(debug=args.log_level == 'DEBUG')

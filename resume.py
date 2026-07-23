@@ -64,8 +64,10 @@ class DownloadProgress:
         if self.downloaded == 0:
             return None
         elapsed = time.time() - self.start_time
+        if elapsed <= 0:
+            return 0.0 if self.downloaded >= self.total_size else None
         rate = self.downloaded / elapsed
-        remaining = self.total_size - self.downloaded
+        remaining = max(self.total_size - self.downloaded, 0)
         return remaining / rate if rate > 0 else None
     
     def get_stats(self) -> Dict[str, float]:

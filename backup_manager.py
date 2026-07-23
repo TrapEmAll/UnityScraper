@@ -390,8 +390,14 @@ def atomic_copy(
         raise ValueError("conflict must be skip, replace, or error")
     if destination_path.exists():
         if conflict == "skip":
+            source_hash = sha256_file(source_path)
+            destination_hash = sha256_file(destination_path)
             return TransferResult(
-                str(source_path), str(destination_path), 0, sha256_file(destination_path), "skipped"
+                str(source_path),
+                str(destination_path),
+                0,
+                destination_hash,
+                "skipped" if source_hash == destination_hash else "conflict",
             )
         if conflict == "error":
             raise ConflictError(f"Destination already exists: {destination_path}")
@@ -542,12 +548,21 @@ def export_backup_item(
     output_root = Path(destination_root).expanduser().resolve()
     safe_name = re.sub(r'[<>:"/\\|?*]', "_", item.name).strip(" .") or item.title_id or "XboxGame"
     destination = output_root / safe_name
+    try:
+        destination.resolve().relative_to(output_root)
+    except ValueError as exc:
+        raise BackupError("Export destination escapes the selected root") from exc
     if destination.exists():
         if conflict == "skip":
             return destination
         if conflict == "error":
             raise ConflictError(f"Export destination already exists: {destination}")
-        shutil.rmtree(destination)
+        if destination.is_symlink():
+            destination.unlink()
+        elif destination.is_dir():
+            shutil.rmtree(destination)
+        else:
+            raise ConflictError(f"Export destination is not a directory: {destination}")
     destination.mkdir(parents=True, exist_ok=True)
     files = []
     source_root = item.path
@@ -661,11 +676,23 @@ class FtpBackupClient:
                 )
             if remote_exists and conflict == "error":
                 raise ConflictError(f"Remote destination already exists: {remote}")
-            with source_path.open("rb") as handle:
-                ftp.storbinary(f"STOR {partial}", handle, blocksize=64 * 1024, callback=callback)
-            if remote_exists:
-                ftp.delete(str(remote))
-            ftp.rename(str(partial), str(remote))
+            try:
+                with source_path.open("rb") as handle:
+                    ftp.storbinary(
+                        f"STOR {partial}",
+                        handle,
+                        blocksize=64 * 1024,
+                        callback=callback,
+                    )
+                if remote_exists:
+                    ftp.delete(str(remote))
+                ftp.rename(str(partial), str(remote))
+            except Exception:
+                try:
+                    ftp.delete(str(partial))
+                except ftplib.all_errors:
+                    pass
+                raise
         return TransferResult(
             str(source_path),
             str(remote),

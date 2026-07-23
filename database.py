@@ -6,6 +6,7 @@ SQLite-based indexing and metadata storage for TitleIDs
 import sqlite3
 import json
 import logging
+import hashlib
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional, Any
@@ -19,12 +20,13 @@ logger = logging.getLogger(__name__)
 
 class DatabaseManager:
     """Manages SQLite database for TitleID indexing and metadata"""
-    
+
     def __init__(self, db_path: str = None):
-        ensure_app_dirs()
         if db_path is None:
+            ensure_app_dirs()
             db_path = str(DATABASE_PATH)
         self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.init_database()
     
     @contextmanager

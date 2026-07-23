@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python ${{ matrix.python }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.10", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Check high-confidence Python errors
+        run: python -m ruff check .
+
+      - name: Compile Python modules
+        run: python -m compileall -q .
+
+      - name: Check version consistency
+        run: python scripts/check_version.py
+
+      - name: Run tests
+        run: python tests.py
+
+      - name: Run legacy integration tests
+        run: python integration_tests.py
+
+  windows-build:
+    name: Windows executable
+    runs-on: windows-latest
+    needs: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install build dependencies
+        run: python -m pip install -r requirements.txt pyinstaller
+
+      - name: Build
+        run: python -m PyInstaller --clean --noconfirm UnityScraper.spec
+
+      - name: Generate checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash dist\UnityScraper.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash *UnityScraper.exe" | Set-Content dist\UnityScraper.exe.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UnityScraper-Windows-x64
+          path: |
+            dist/UnityScraper.exe
+            dist/UnityScraper.exe.sha256
+          if-no-files-found: error

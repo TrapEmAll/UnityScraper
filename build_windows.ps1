@@ -6,34 +6,28 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ProjectRoot
 
-if ($Clean) {
-    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue build, dist
-    Remove-Item -Force -ErrorAction SilentlyContinue UnityScraper.spec
+$Python = "python"
+if (Test-Path ".venv\Scripts\python.exe") {
+    $Python = ".venv\Scripts\python.exe"
 }
 
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-python -m pip install pyinstaller
+if ($Clean) {
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue build, dist
+}
 
-python -m PyInstaller `
-    --name UnityScraper `
-    --noconsole `
-    --onefile `
-    --icon "assets\UnityScraper.ico" `
-    --add-data "JSON.txt;." `
-    --add-data "VERSION;." `
-    --add-data "assets;assets" `
-    --hidden-import backup_gui `
-    --hidden-import backup_manager `
-    --hidden-import backup_service `
-    --hidden-import consolemods_adapters `
-    --hidden-import dat_adapters `
-    --hidden-import knowledge_gui `
-    --hidden-import knowledge_service `
-    --hidden-import knowledge_sync `
-    --hidden-import wiki_adapters `
-    desktop_app.py
+& $Python -m pip install -r requirements.txt
+& $Python -m pip install pyinstaller
+& $Python -m PyInstaller --clean --noconfirm UnityScraper.spec
+
+$Executable = Join-Path $ProjectRoot "dist\UnityScraper.exe"
+if (-not (Test-Path $Executable)) {
+    throw "PyInstaller completed without creating $Executable"
+}
+
+$Hash = (Get-FileHash $Executable -Algorithm SHA256).Hash.ToLower()
+"$Hash *UnityScraper.exe" | Set-Content "$Executable.sha256"
 
 Write-Host ""
-Write-Host "Build complete: $ProjectRoot\dist\UnityScraper.exe"
-Write-Host "User data is stored under %LOCALAPPDATA%\UnityScraper"
+Write-Host "Build complete: $Executable"
+Write-Host "Checksum: $Executable.sha256"
+Write-Host "User data: %LOCALAPPDATA%\UnityScraper"
