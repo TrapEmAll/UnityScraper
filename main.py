@@ -780,6 +780,27 @@ def main():
         action='store_true',
         help='Import ConsoleMods knowledge data and enrich unknown library metadata'
     )
+    parser.add_argument(
+        '--sync-wikis',
+        action='store_true',
+        help='Cache and index ConsoleMods, XenonLibrary, and Free60 wiki articles'
+    )
+    parser.add_argument(
+        '--wiki-limit',
+        type=int,
+        default=None,
+        help='Optional maximum article count per wiki source'
+    )
+    parser.add_argument(
+        '--import-dat',
+        type=str,
+        help='Import a local Redump or No-Intro XML DAT file'
+    )
+    parser.add_argument(
+        '--dat-source',
+        choices=['redump', 'no-intro'],
+        help='Source type for --import-dat'
+    )
     
     args = parser.parse_args()
     
@@ -835,6 +856,32 @@ def main():
             sys.exit(0)
         except Exception as e:
             logger.error(f"Knowledge sync failed: {e}")
+            sys.exit(1)
+
+    if args.sync_wikis:
+        try:
+            from knowledge_sync import sync_reference_wikis
+
+            summary = sync_reference_wikis(
+                max_documents_per_source=args.wiki_limit,
+            )
+            logger.info("Wiki sync completed: %s", summary)
+            sys.exit(0)
+        except Exception as e:
+            logger.error(f"Wiki sync failed: {e}")
+            sys.exit(1)
+
+    if args.import_dat:
+        if not args.dat_source:
+            parser.error("--dat-source is required with --import-dat")
+        try:
+            from knowledge_sync import import_dat_knowledge
+
+            summary = import_dat_knowledge(args.import_dat, args.dat_source)
+            logger.info("DAT import completed: %s", summary)
+            sys.exit(0)
+        except Exception as e:
+            logger.error(f"DAT import failed: {e}")
             sys.exit(1)
 
     scraper = UnityScraper(config)

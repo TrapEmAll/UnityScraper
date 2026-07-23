@@ -1,10 +1,10 @@
 # Xbox 360 Knowledge Foundation
 
 UnityScraper now has a normalized knowledge layer for Xbox 360 reference data.
-The first adapters import ConsoleMods TitleID and Multi-ID game data; the schema
-is designed for later XenonLibrary, Free60, Redump DAT, and No-Intro DAT
-adapters without mixing untraceable facts into the legacy `titleids.metadata`
-blob.
+The knowledge layer imports ConsoleMods TitleID and Multi-ID game data, caches
+Xbox 360 wiki articles from ConsoleMods, XenonLibrary, and Free60, and accepts
+user-selected Redump and No-Intro XML DAT files. Imported claims remain separate
+from the legacy `titleids.metadata` blob and retain source provenance.
 
 ## Import Command
 
@@ -24,6 +24,37 @@ The command:
 
 Known user-entered or XboxUnity-provided title and publisher values are not
 overwritten.
+
+## Whole-Wiki Sync
+
+```powershell
+python main.py --sync-wikis
+```
+
+ConsoleMods and XenonLibrary pages are discovered through MediaWiki's paginated
+all-pages API, with XML sitemap discovery as an additional path. Free60 uses
+its XML sitemap. Seed pages are used only when discovery is unavailable.
+
+Every fetched article is cached locally and imported as a searchable knowledge
+entity with its source URL, revision snapshot, summary, and visible article
+text. Pages containing words such as `outdated`, `historical`, or `obsolete`
+receive a freshness warning.
+
+Use `--wiki-limit N` to restrict each source during testing or a first sync.
+
+## Preservation DAT Import
+
+Download DATs directly from their source and import them locally:
+
+```powershell
+python main.py --import-dat "C:\path\xbox360.dat" --dat-source redump
+python main.py --import-dat "C:\path\xbox360-digital.dat" --dat-source no-intro
+```
+
+The importer reads common Logiqx-style XML and stores release names, regions,
+languages, versions, serials, file names, sizes, status values, CRC32, MD5,
+SHA-1, and SHA-256 identifiers when present. It never downloads or copies game
+content.
 
 ## Schema
 
@@ -71,13 +102,22 @@ XboxUnity API endpoints remain HTTP-only in UnityScraper. Knowledge-source
 adapters may use HTTPS for non-XboxUnity websites, but they do not change
 XboxUnity transport behavior.
 
-## Next Steps
+## Desktop Experience
 
-1. Add a source-management UI for sync status, source licenses, and conflicts.
-2. Add XenonLibrary adapters for hardware entities and board/component facts.
-3. Add Free60 adapters for technical articles and system-format entities.
-4. Add Redump DAT import for disc identities, serials, and hashes.
-5. Add No-Intro DAT import for digital/package identities and hashes.
-6. Add full-text indexing for cached wiki articles.
-7. Add explicit relationship records for multi-ID groups once the UI can show
-   grouped releases.
+The **Knowledge** page includes:
+
+- global entity, identifier, and fact search;
+- details with source names and citation URLs;
+- source license, document count, fact count, and latest import status;
+- ConsoleMods ID sync and whole-wiki sync;
+- Redump and No-Intro file import;
+- conflicting-claim review.
+
+## Remaining Boundaries
+
+- Source availability, access controls, and licenses can change. Failed syncs
+  are isolated per source and previously cached pages remain available.
+- Redump and No-Intro DATs are not bundled. Users obtain them from the source.
+- Wiki content is reference material, not automatically trusted repair advice.
+- Commercial game images, firmware, keys, and leaked SDK files are never
+  imported or distributed.

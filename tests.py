@@ -22,6 +22,10 @@ from consolemods_adapters import (
     short_code_to_titleid,
 )
 from knowledge_base import EntityRecord, Fact, Identifier, KnowledgeRepository
+from dat_adapters import parse_dat
+from knowledge_service import KnowledgeService
+from knowledge_sources import KnowledgeImportService, SourceInfo
+from wiki_adapters import extract_article_text, parse_sitemap
 
 
 class TestConfig(unittest.TestCase):
@@ -351,6 +355,116 @@ class TestConsoleModsAdapters(unittest.TestCase):
         self.assertIn("5454080E", bioshock[0].aliases)
 
 
+class TestKnowledgeApplication(unittest.TestCase):
+    """Test DAT ingestion, wiki parsing, and knowledge browser queries."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = Path(self.temp_dir) / "knowledge.db"
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir)
+
+    def test_parse_redump_style_dat(self):
+        sample = """
+        <datafile>
+          <header><name>Microsoft - Xbox 360</name></header>
+          <game name="Example Game (USA)">
+            <description>Example Game (USA)</description>
+            <region>USA</region>
+            <serial>AB-1234</serial>
+            <rom name="example.iso" size="1024"
+                 crc="1234ABCD" md5="0123456789ABCDEF0123456789ABCDEF"
+                 sha1="0123456789ABCDEF0123456789ABCDEF01234567"/>
+          </game>
+        </datafile>
+        """
+        records = parse_dat(sample, "disc_release")
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].canonical_name, "Example Game (USA)")
+        identifiers = {(item.kind, item.value) for item in records[0].identifiers}
+        self.assertIn(("serial", "AB-1234"), identifiers)
+        self.assertIn(("crc32", "1234ABCD"), identifiers)
+        self.assertIn(("sha1", "0123456789ABCDEF0123456789ABCDEF01234567"), identifiers)
+
+    def test_parse_sitemap_and_article(self):
+        sitemap = """
+        <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+          <url><loc>https://free60.org/Hardware/</loc></url>
+          <url><loc>https://free60.org/Formats/</loc></url>
+        </urlset>
+        """
+        pages, children = parse_sitemap(sitemap)
+        self.assertEqual(len(pages), 2)
+        self.assertEqual(children, [])
+
+        title, body = extract_article_text(
+            "<html><head><title>NAND - Free60 Wiki</title></head>"
+            "<body><h1>NAND</h1><p>Flash storage reference.</p>"
+            "<script>ignore me</script></body></html>",
+            "Fallback",
+        )
+        self.assertEqual(title, "NAND")
+        self.assertIn("Flash storage reference.", body)
+        self.assertNotIn("ignore me", body)
+
+    def test_search_and_provenance_details(self):
+        db = DatabaseManager(str(self.db_path))
+        with db.get_connection() as connection:
+            repository = KnowledgeRepository(connection)
+            source_id = repository.upsert_source(
+                "test-wiki",
+                "Test Wiki",
+                homepage_url="https://example.test/",
+                license_name="CC BY 4.0",
+            )
+            repository.upsert_entity_record(
+                EntityRecord(
+                    entity_type="hardware",
+                    canonical_name="Xenon Motherboard",
+                    identifiers=(Identifier("part_number", "X803600-011"),),
+                    facts=(Fact("nand_size", "16 MB"),),
+                ),
+                source_id,
+            )
+
+        service = KnowledgeService(self.db_path)
+        results = service.search("X803600")
+        self.assertEqual(len(results), 1)
+        details = service.entity_details(results[0]["id"])
+        self.assertEqual(details["entity"]["canonical_name"], "Xenon Motherboard")
+        self.assertEqual(details["facts"][0]["source_name"], "Test Wiki")
+        test_source = next(
+            row for row in service.list_sources() if row["slug"] == "test-wiki"
+        )
+        self.assertEqual(test_source["license_name"], "CC BY 4.0")
+
+    def test_failed_import_run_is_persisted(self):
+        class FailingAdapter:
+            source = SourceInfo("failing", "Failing Source", "https://example.test")
+            adapter_name = "failing_adapter"
+
+            @staticmethod
+            def fetch_documents():
+                raise RuntimeError("source unavailable")
+                yield
+
+            @staticmethod
+            def parse_document(document):
+                raise AssertionError(document)
+
+        db = DatabaseManager(str(self.db_path))
+        with db.get_connection() as connection:
+            repository = KnowledgeRepository(connection)
+            summary = KnowledgeImportService(repository).run_adapter(FailingAdapter())
+            self.assertEqual(summary["status"], "failed")
+
+        service = KnowledgeService(self.db_path)
+        run = service.list_import_runs()[0]
+        self.assertEqual(run["status"], "failed")
+        self.assertIn("source unavailable", run["errors"])
+
+
 class TestDownloadProgress(unittest.TestCase):
     """Test download progress tracking"""
     
@@ -523,6 +637,7 @@ def run_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestUnityScraper))
     suite.addTests(loader.loadTestsFromTestCase(TestDatabaseManager))
     suite.addTests(loader.loadTestsFromTestCase(TestConsoleModsAdapters))
+    suite.addTests(loader.loadTestsFromTestCase(TestKnowledgeApplication))
     suite.addTests(loader.loadTestsFromTestCase(TestDownloadProgress))
     suite.addTests(loader.loadTestsFromTestCase(TestResumableDownloader))
     suite.addTests(loader.loadTestsFromTestCase(TestBatchDownloadManager))

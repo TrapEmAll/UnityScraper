@@ -32,13 +32,16 @@ from app_paths import (
     ensure_user_titleids_file,
     resource_path,
 )
+from app_version import DISPLAY_VERSION
 from database import DatabaseManager
 from diagnostics import create_diagnostics_bundle
+from knowledge_service import KnowledgeService
+from knowledge_gui import KnowledgePage
 from library_service import GameSummary, LibraryService
 from setup_wizard import run_first_run_wizard
 
 
-APP_VERSION = "0.8.0-beta"
+APP_VERSION = DISPLAY_VERSION
 
 BG = "#050806"
 PANEL = "#0a0f0c"
@@ -176,6 +179,7 @@ class UnityScraperDesktop:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.library = LibraryService()
+        self.knowledge = KnowledgeService()
         self.database = DatabaseManager()
         self.current_game: str | None = None
 
@@ -296,19 +300,20 @@ class UnityScraperDesktop:
         )
 
         pages = (
-            ("▣   LIBRARY", self.show_library),
-            ("✚   ADD GAMES", self.show_add_games),
-            ("⬇   DOWNLOADS", self.show_downloads),
-            ("⬡   ARCHIVE HEALTH", self.show_health),
-            ("⚙   SETTINGS", self.show_settings),
-            ("?   HELP & ABOUT", self.show_about),
+            ("LIBRARY", self.show_library),
+            ("ADD GAMES", self.show_add_games),
+            ("DOWNLOADS", self.show_downloads),
+            ("KNOWLEDGE", self.show_knowledge),
+            ("ARCHIVE HEALTH", self.show_health),
+            ("SETTINGS", self.show_settings),
+            ("HELP & ABOUT", self.show_about),
         )
         for label, callback in pages:
             ttk.Button(nav, text=label, command=callback, style="Nav.TButton", width=22).pack(
                 fill=tk.X, pady=5
             )
 
-        ttk.Label(nav, text="● CONNECTED", style="AccentBrand.TLabel").pack(
+        ttk.Label(nav, text="CONNECTED", style="AccentBrand.TLabel").pack(
             side=tk.BOTTOM, anchor=tk.W, padx=6, pady=(4, 0)
         )
         ttk.Label(nav, text="Ready", style="AccentBrand.TLabel").pack(
@@ -719,6 +724,18 @@ class UnityScraperDesktop:
             text="Open GUI Log",
             command=self._open_log,
         ).pack(anchor=tk.W, pady=6)
+
+    def show_knowledge(self) -> None:
+        self._clear_content()
+        self._page_header(
+            "Xbox 360 Knowledge",
+            "Search games, releases, hardware, formats, repair notes, and source documents.",
+        )
+        self.knowledge_page = KnowledgePage(
+            self.root,
+            self.content,
+            self.knowledge,
+        )
 
     def show_health(self) -> None:
         self._clear_content()
