@@ -1,0 +1,2 @@
+Rename this file to portable.mode to store the database, configuration, logs,
+diagnostics, and downloads in a UnityScraperData folder beside the executable.
