@@ -29,7 +29,7 @@ class SetupWizard(tk.Toplevel):
         self.parent = parent
         self.completed = False
         self.title("Welcome to UnityScraper")
-        self.geometry("620x420")
+        self.geometry("620x500")
         self.resizable(False, False)
         self.transient(parent)
         self.grab_set()
@@ -39,6 +39,7 @@ class SetupWizard(tk.Toplevel):
 
         self.output_var = tk.StringVar(value=str(DOWNLOADS_DIR))
         self.titleids_var = tk.StringVar()
+        self.collection_var = tk.StringVar()
 
         self._build()
 
@@ -81,6 +82,16 @@ class SetupWizard(tk.Toplevel):
             text="Comma-separated, for example: 4D53082D, 584109A8",
         ).pack(anchor=tk.W)
 
+        ttk.Label(container, text="Optional collection folder").pack(anchor=tk.W, pady=(16, 0))
+        collection_row = ttk.Frame(container)
+        collection_row.pack(fill=tk.X, pady=(5, 4))
+        ttk.Entry(collection_row, textvariable=self.collection_var).pack(
+            side=tk.LEFT, fill=tk.X, expand=True
+        )
+        ttk.Button(collection_row, text="Browse", command=self._browse_collection).pack(
+            side=tk.LEFT, padx=(8, 0)
+        )
+
         ttk.Separator(container).pack(fill=tk.X, pady=22)
 
         ttk.Label(
@@ -111,6 +122,11 @@ class SetupWizard(tk.Toplevel):
         if selected:
             self.output_var.set(selected)
 
+    def _browse_collection(self) -> None:
+        selected = filedialog.askdirectory(parent=self, title="Choose Xbox 360 collection")
+        if selected:
+            self.collection_var.set(selected)
+
     def _finish(self) -> None:
         output = Path(self.output_var.get()).expanduser()
         try:
@@ -137,6 +153,12 @@ class SetupWizard(tk.Toplevel):
                 "rate_limit": float(config.get("rate_limit", 0.35)),
                 "timeout": int(config.get("timeout", 30)),
                 "max_retries": int(config.get("max_retries", 3)),
+                "collection_roots": (
+                    [self.collection_var.get().strip()]
+                    if self.collection_var.get().strip()
+                    else config.get("collection_roots", [])
+                ),
+                "ui_scale": float(config.get("ui_scale", 1.0)),
             }
         )
         CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")

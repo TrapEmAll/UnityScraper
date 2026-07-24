@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from app_paths import DATABASE_PATH, ensure_app_dirs
+from database_migrations import ensure_application_schema
 from backup_manager import (
     BackupItem,
     FtpBackupClient,
@@ -120,6 +121,7 @@ class BackupRepository:
     def ensure_schema(self) -> None:
         with self.connect() as connection:
             ensure_backup_schema(connection)
+            ensure_application_schema(connection)
 
     def save_local_target(self, name: str, location: str | Path) -> int:
         now = datetime.now(timezone.utc).isoformat()
@@ -359,6 +361,24 @@ class BackupService:
             details={"issues": issues},
         )
         return issues
+
+    def verify_many(self, items: list[BackupItem]) -> list[dict]:
+        """Structurally verify an inventory batch."""
+        findings = []
+        for item in items:
+            issues = self.verify(item)
+            if issues:
+                findings.append({"path": str(item.path), "issues": issues})
+        return findings
+
+    def export_many(
+        self,
+        items: list[BackupItem],
+        destination: str | Path,
+        conflict: str = "skip",
+    ) -> list[Path]:
+        """Export an inventory batch using verified per-item exports."""
+        return [self.export(item, destination, conflict) for item in items]
 
     def upload_ftp(
         self, source: str | Path, target: FtpTarget

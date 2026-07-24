@@ -879,6 +879,24 @@ def main():
         type=str,
         help='Output directory for --convert-iso'
     )
+    parser.add_argument('--analyze-collection', type=str, help='Analyze a local collection root')
+    parser.add_argument('--aurora-db', type=str, help='Analyze an Aurora database read-only')
+    parser.add_argument('--collection-manifest', type=str, help='Write a preservation manifest')
+    parser.add_argument('--collection-html', type=str, help='Write an offline HTML report')
+    parser.add_argument(
+        '--create-repair-plan', action='store_true',
+        help='Save a non-destructive repair-plan preview for the collection'
+    )
+    parser.add_argument('--match-file', type=str, help='Match a file against imported DAT hashes')
+    parser.add_argument('--export-provenance', type=str, help='Export knowledge provenance as JSON')
+    parser.add_argument('--backup-database', type=str, help='Create a consistent SQLite backup')
+    parser.add_argument('--ftp-snapshot', type=str, help='Capture a read-only remote inventory root')
+    parser.add_argument('--ftp-download', type=str, help='Queue and run a resumable FTP download')
+    parser.add_argument('--ftp-local-path', type=str, help='Local path for an FTP sync operation')
+    parser.add_argument(
+        '--ftp-bandwidth-limit', type=int, default=0,
+        help='FTP sync limit in bytes per second (0 = unlimited)'
+    )
     
     args = parser.parse_args()
     
@@ -965,6 +983,96 @@ def main():
             sys.exit(0)
         except Exception as e:
             logger.error(f"DAT import failed: {e}")
+            sys.exit(1)
+
+    if (
+        args.analyze_collection
+        or args.aurora_db
+        or args.match_file
+        or args.export_provenance
+        or args.backup_database
+    ):
+        try:
+            from app_paths import DATABASE_PATH
+            from collection_intelligence import CollectionIntelligenceService
+            from database_migrations import create_database_backup
+
+            service = CollectionIntelligenceService()
+            if args.backup_database:
+                backup = create_database_backup(DATABASE_PATH, args.backup_database)
+                logger.info("Database backup written to %s", backup)
+            if args.match_file:
+                matches = service.hash_and_match(args.match_file)
+                logger.info("Preservation matches: %s", json.dumps(matches, indent=2))
+            if args.export_provenance:
+                output = service.export_provenance(args.export_provenance)
+                logger.info("Provenance written to %s", output)
+            if args.analyze_collection or args.aurora_db:
+                analysis = (
+                    service.analyze(args.analyze_collection)
+                    if args.analyze_collection
+                    else service.analyze_aurora(args.aurora_db)
+                )
+                logger.info(
+                    "Collection health %s/100: %s item(s), %s issue(s)",
+                    analysis.health_score,
+                    len(analysis.result.items),
+                    len(analysis.issues),
+                )
+                if args.collection_manifest:
+                    logger.info(
+                        "Manifest written to %s",
+                        service.export_manifest(analysis, args.collection_manifest),
+                    )
+                if args.collection_html:
+                    logger.info(
+                        "HTML report written to %s",
+                        service.export_html(analysis, args.collection_html),
+                    )
+                if args.create_repair_plan:
+                    logger.info(
+                        "Repair-plan preview saved as %s",
+                        service.create_repair_plan(analysis),
+                    )
+            sys.exit(0)
+        except Exception as e:
+            logger.error("Collection operation failed: %s", e)
+            sys.exit(1)
+
+    if args.ftp_snapshot or args.ftp_download:
+        if not args.ftp_host:
+            parser.error("--ftp-host is required for console sync")
+        try:
+            from backup_manager import FtpTarget
+            from console_sync import ConsoleSyncService
+
+            target = FtpTarget(
+                host=args.ftp_host,
+                port=args.ftp_port,
+                username=args.ftp_user,
+                password=args.ftp_password,
+                content_root=args.ftp_content_root,
+            )
+            sync = ConsoleSyncService()
+            if args.ftp_snapshot:
+                snapshot = sync.capture_inventory(target, args.ftp_snapshot)
+                logger.info("Console inventory snapshot %s completed", snapshot)
+            if args.ftp_download:
+                if not args.ftp_local_path:
+                    parser.error("--ftp-local-path is required with --ftp-download")
+                job = sync.enqueue(
+                    "download",
+                    args.ftp_local_path,
+                    args.ftp_download,
+                    bandwidth_limit=args.ftp_bandwidth_limit,
+                )
+                result = sync.run_job(job, target)
+                logger.info("Console transfer %s: %s", job, result["status"])
+                if result["status"] != "completed":
+                    sys.exit(1)
+            sys.exit(0)
+        except Exception as e:
+            logger.error("Console sync failed: %s", e)
             sys.exit(1)
 
     if (

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Iterable
@@ -83,6 +84,13 @@ def parse_dat(text: str, entity_type: str) -> list[EntityRecord]:
             continue
         identifiers: list[Identifier] = []
         facts: list[Fact] = []
+        alternate_names: tuple[str, ...] = ()
+
+        base_name, inferred = _infer_release_fields(game_name)
+        if base_name and base_name != game_name:
+            alternate_names = (base_name,)
+            facts.append(Fact("release_group", base_name))
+        facts.extend(Fact(key, value) for key, value in inferred.items())
 
         for property_name, xml_name in (
             ("description", "description"),
@@ -134,6 +142,7 @@ def parse_dat(text: str, entity_type: str) -> list[EntityRecord]:
                 entity_type=entity_type,
                 canonical_name=game_name,
                 identifiers=tuple(identifiers),
+                names=alternate_names,
                 facts=tuple(unique_facts),
             )
         )
@@ -145,3 +154,36 @@ def _child_text(node: ET.Element | None, name: str) -> str:
         return ""
     child = node.find(name)
     return (child.text or "").strip() if child is not None else ""
+
+
+def _infer_release_fields(name: str) -> tuple[str, dict[str, str]]:
+    """Extract common No-Intro/Redump naming tags without replacing DAT facts."""
+    tags = re.findall(r"\(([^()]*)\)", name)
+    base = re.sub(r"\s+\([^()]*\)", "", name).strip()
+    inferred: dict[str, str] = {}
+    regions = {
+        "USA",
+        "Europe",
+        "Japan",
+        "World",
+        "Australia",
+        "Asia",
+        "Korea",
+        "China",
+        "Canada",
+    }
+    language_codes = {"En", "Fr", "De", "Es", "It", "Pt", "Ja", "Ko", "Zh", "Ru", "Nl"}
+    for tag in tags:
+        values = [value.strip() for value in tag.split(",")]
+        if values and all(value in language_codes for value in values):
+            inferred.setdefault("languages", ", ".join(values))
+        if tag in regions:
+            inferred.setdefault("region", tag)
+        if re.match(r"^(Rev|Revision|Version|v)\s*", tag, re.IGNORECASE):
+            inferred.setdefault("revision", tag)
+        disc = re.match(r"^Disc\s+(\d+)(?:\s+of\s+(\d+))?$", tag, re.IGNORECASE)
+        if disc:
+            inferred.setdefault("disc_number", disc.group(1))
+            if disc.group(2):
+                inferred.setdefault("disc_count", disc.group(2))
+    return base, inferred

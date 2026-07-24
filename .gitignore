@@ -44,6 +44,7 @@ build/
 dist/
 *.spec.bak
 *.zip
+UnityScraper-SBOM.cdx.json
 
 # IDE and operating system
 .vs/

@@ -472,19 +472,23 @@ class TestFeatureIntegration(unittest.TestCase):
         from queue_manager import DownloadQueue
         from resume import DownloadProgress
         
-        queue = DownloadQueue()
-        
-        # Add item to queue with correct signature
-        result = queue.add_item('TESTID00', 'cover', 'http://example.com/file.bin', '/tmp/file.bin', priority=1)
-        self.assertTrue(result)
-        
-        # Create progress tracker (would be used during download)
-        progress = DownloadProgress(1000, Path('file.bin'))
-        progress.update(500)
-        
-        # Both should work independently
-        self.assertIsNotNone(queue.get_next_item())
-        self.assertGreater(progress.percentage, 0)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            queue = DownloadQueue(Path(temp_dir) / "queue.json")
+
+            # Add item to queue with correct signature
+            result = queue.add_item(
+                'TESTID00', 'cover', 'http://example.com/file.bin',
+                '/tmp/file.bin', priority=1
+            )
+            self.assertTrue(result)
+
+            # Create progress tracker (would be used during download)
+            progress = DownloadProgress(1000, Path('file.bin'))
+            progress.update(500)
+
+            # Both should work independently
+            self.assertIsNotNone(queue.get_next_item())
+            self.assertGreater(progress.percentage, 0)
     
     def test_integrity_checker_with_database(self):
         """Test integrity checker works with database"""

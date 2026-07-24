@@ -1,6 +1,6 @@
 {
-  "version": "0.10.0b1",
-  "name": "Xbox 360 Knowledge and Backup Manager",
+  "version": "1.0.0b1",
+  "name": "Unified Xbox 360 Collection and Preservation Manager",
   "changes": [
     "Unified Xbox 360 knowledge browser",
     "ConsoleMods, XenonLibrary, and Free60 wiki ingestion",
@@ -9,7 +9,14 @@
     "Local Xbox content and Games folder inventory",
     "Safe STFS package and ZIP installation",
     "Verified exports with preservation manifests",
-    "FTP console transfer and external ISO converter support"
+    "Persistent resumable FTP console synchronization",
+    "XEX identity parsing and exact MediaID title-update matching",
+    "Mounted-storage discovery and read-only Aurora database import",
+    "Collection health scoring and repair-plan previews",
+    "Redump and No-Intro local-file hash matching",
+    "Offline HTML reports, manifests, provenance, and metadata overrides",
+    "Versioned migrations, database backups, queue recovery, and plugin API v1",
+    "Platform-aware verified updates, SBOMs, and build attestations"
   ],
   "download_url": "https://github.com/TrapEmAll/UnityScraper/releases",
   "release_date": "2026-07-23"

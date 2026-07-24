@@ -24,18 +24,23 @@ backup-management, and source-attributed knowledge application.
   dynamically loaded knowledge adapters.
 - Local inventory for Xbox content roots, USB drives, archive folders, Games on
   Demand, XBLA, DLC, title updates, and extracted Xbox/Xbox 360 games.
-- Public STFS and XBE header inspection for TitleID, MediaID, content type, disc,
-  and display metadata.
+- Public STFS, XBE, and XEX2 header inspection for TitleID, MediaID, versions,
+  content type, disc, and display metadata.
+- Mounted-storage discovery, read-only Aurora database import, exact MediaID
+  Title Update comparison, collection health scoring, and repair previews.
+- Preservation hash matching against imported DAT metadata, offline HTML
+  reports, manifests, provenance exports, and separate local overrides.
 - Safe bare-package and ZIP installation with path validation, `.partial`
   staging, SHA-256 verification, and atomic final placement.
 - Verified archive export with portable JSON manifests and per-file checksums.
-- Aurora-oriented FTP package upload with one connection per operation,
-  temporary remote names, and no stored passwords.
+- Persistent resumable FTP upload/download jobs, partial-file recovery,
+  bandwidth limits, verified final sizes, read-only console snapshots, and no
+  stored passwords.
 - Explicit external converter integration for user-owned ISO images.
 - Local-by-default REST API with token-required remote binding, restricted
   browser origins, validated settings, and current version reporting.
-- Cross-platform CI, Windows packaging checks, tagged release archives, and
-  SHA-256 release checksums.
+- Cross-platform CI, Windows packaging checks, tagged release archives,
+  SHA-256 checksums, CycloneDX SBOMs, and build-provenance attestations.
 - Linux x86_64 packaging, XDG storage, application-menu integration, source
   launch scripts, and release artifacts.
 - Repository contribution, security, architecture, API, and release
@@ -70,8 +75,7 @@ backup-management, and source-attributed knowledge application.
 
 ## Future Work
 
-- Parse additional XEX fields and link scanned file identifiers directly to
-  normalized knowledge entities.
 - Add field-specific source-priority controls and conflict resolution actions.
-- Add optional scheduled knowledge refreshes and offline HTML reports.
-- Add resumable FTP queues and optional Aurora database inventory.
+- Add optional scheduled knowledge refreshes.
+- Validate console resume behavior against a broader matrix of dashboard FTP
+  servers and add opt-in remote hash verification where servers expose it.

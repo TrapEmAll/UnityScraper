@@ -5,9 +5,12 @@ Persist and restore download queues across sessions
 
 import json
 import logging
+import os
+import uuid
 from pathlib import Path
 from typing import List, Dict, Optional
 from datetime import datetime
+from app_paths import DATA_DIR, ensure_app_dirs
 
 logger = logging.getLogger(__name__)
 
@@ -15,8 +18,12 @@ logger = logging.getLogger(__name__)
 class DownloadQueue:
     """Manage persistent download queue"""
     
-    def __init__(self, queue_file: str = "download_queue.json"):
-        self.queue_file = Path(queue_file)
+    def __init__(self, queue_file: str | Path | None = None):
+        if queue_file is None:
+            ensure_app_dirs()
+            self.queue_file = DATA_DIR / "download_queue.json"
+        else:
+            self.queue_file = Path(queue_file)
         self.queue: List[Dict] = []
         self.load_queue()
     
@@ -25,7 +32,7 @@ class DownloadQueue:
         """Add item to queue"""
         try:
             item = {
-                'id': f"{titleid}_{item_type}_{len(self.queue)}",
+                'id': uuid.uuid4().hex,
                 'titleid': titleid,
                 'type': item_type,  # 'cover' or 'update'
                 'url': url,
@@ -95,7 +102,6 @@ class DownloadQueue:
         for item in self.queue:
             if item['status'] == 'failed' and item['retry_count'] < max_retries:
                 item['status'] = 'queued'
-                item['retry_count'] += 1
                 retried += 1
         if retried > 0:
             self.save_queue()
@@ -143,10 +149,15 @@ class DownloadQueue:
         return None
     
     def save_queue(self):
-        """Save queue to JSON file"""
+        """Save the queue atomically so a crash cannot truncate it."""
         try:
-            with open(self.queue_file, 'w') as f:
-                json.dump(self.queue, f, indent=2)
+            self.queue_file.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.queue_file.with_suffix(self.queue_file.suffix + ".tmp")
+            with temporary.open("w", encoding="utf-8") as handle:
+                json.dump(self.queue, handle, indent=2)
+                handle.flush()
+                os.fsync(handle.fileno())
+            temporary.replace(self.queue_file)
         except Exception as e:
             logger.error(f"Failed to save queue: {e}")
     
@@ -154,8 +165,17 @@ class DownloadQueue:
         """Load queue from JSON file"""
         try:
             if self.queue_file.exists():
-                with open(self.queue_file, 'r') as f:
+                with self.queue_file.open("r", encoding="utf-8") as f:
                     self.queue = json.load(f)
+                recovered = 0
+                for item in self.queue:
+                    if item.get("status") == "downloading":
+                        item["status"] = "queued"
+                        item["error"] = "Recovered after an interrupted session"
+                        recovered += 1
+                if recovered:
+                    self.save_queue()
+                    logger.info(f"Recovered {recovered} interrupted queue items")
                 logger.info(f"Loaded {len(self.queue)} items from queue file")
             else:
                 self.queue = []

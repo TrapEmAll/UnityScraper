@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 import tkinter as tk
 from pathlib import Path
+from pathlib import PurePosixPath
 from tkinter import filedialog, messagebox, ttk
 from typing import Callable, Optional
 
@@ -13,8 +14,10 @@ from backup_manager import (
     ExternalConverter,
     FtpBackupClient,
     FtpTarget,
+    inspect_stfs,
 )
 from backup_service import BackupService
+from console_sync import ConsoleSyncService
 
 
 class BackupPage:
@@ -30,6 +33,7 @@ class BackupPage:
         self.root = root
         self.parent = parent
         self.service = service
+        self.console_sync = ConsoleSyncService(service.repository.db_path)
         self.items: dict[str, BackupItem] = {}
         self.busy = False
 
@@ -117,6 +121,12 @@ class BackupPage:
         ttk.Button(
             controls, text="Verify Selected", command=self.verify_selected
         ).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(controls, text="Verify All", command=self.verify_all).pack(
+            side=tk.LEFT, padx=(8, 0)
+        )
+        ttk.Button(controls, text="Export All", command=self.export_all).pack(
+            side=tk.LEFT, padx=(8, 0)
+        )
 
     def _build_transfer(self) -> None:
         tab = self.transfer_tab
@@ -151,10 +161,34 @@ class BackupPage:
         )
         ttk.Button(
             controls,
-            text="Upload Package",
-            command=self.upload_ftp,
+            text="Queue & Upload",
+            command=self.queue_upload,
             style="Accent.TButton",
         ).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(controls, text="Pause", command=self.pause_transfer).pack(
+            side=tk.LEFT, padx=(8, 0)
+        )
+        ttk.Button(controls, text="Resume", command=self.resume_transfer).pack(
+            side=tk.LEFT, padx=(8, 0)
+        )
+        ttk.Button(controls, text="Snapshot Console", command=self.snapshot_console).pack(
+            side=tk.LEFT, padx=(8, 0)
+        )
+        ttk.Button(controls, text="Compare Latest", command=self.compare_console).pack(
+            side=tk.LEFT, padx=(8, 0)
+        )
+        limit_row = ttk.Frame(tab)
+        limit_row.grid(row=8, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        ttk.Label(limit_row, text="Bandwidth limit (KiB/s)").pack(side=tk.LEFT)
+        self.ftp_limit_var = tk.StringVar(value="0")
+        ttk.Spinbox(
+            limit_row, from_=0, to=102400, textvariable=self.ftp_limit_var, width=10
+        ).pack(side=tk.LEFT, padx=(8, 0))
+        self.queue_var = tk.StringVar(value="Persistent queue: empty")
+        ttk.Label(tab, textvariable=self.queue_var, style="Subheader.TLabel").grid(
+            row=9, column=0, columnspan=2, sticky=tk.W, pady=(8, 0)
+        )
+        self._refresh_queue_status()
 
     def _build_converter(self) -> None:
         tab = self.converter_tab
@@ -341,6 +375,41 @@ class BackupPage:
             self.status_var.set("Verification completed with no structural issues.")
             messagebox.showinfo("Verification", "No structural issues found.", parent=self.root)
 
+    def verify_all(self) -> None:
+        if not self.items:
+            messagebox.showinfo("Verification", "Scan a target first.", parent=self.root)
+            return
+        self._run(
+            "Checking all inventoried backups...",
+            lambda: self.service.verify_many(list(self.items.values())),
+            self._verify_batch_done,
+        )
+
+    def _verify_batch_done(self, findings: list[dict]) -> None:
+        self.status_var.set(
+            f"Batch verification completed: {len(findings)} item(s) need attention."
+        )
+        if findings:
+            messagebox.showwarning(
+                "Batch verification",
+                "\n".join(
+                    f"{item['path']}: {', '.join(item['issues'])}" for item in findings[:15]
+                ),
+                parent=self.root,
+            )
+
+    def export_all(self) -> None:
+        if not self.items:
+            messagebox.showinfo("Export", "Scan a target first.", parent=self.root)
+            return
+        destination = filedialog.askdirectory(parent=self.root, title="Choose batch export folder")
+        if destination:
+            self._run(
+                "Exporting all inventoried backups...",
+                lambda: self.service.export_many(list(self.items.values()), destination),
+                lambda paths: self._operation_done(f"Exported {len(paths)} item(s)."),
+            )
+
     def _ftp_target(self) -> FtpTarget:
         host = self.ftp_host_var.get().strip()
         if not host:
@@ -371,6 +440,99 @@ class BackupPage:
                     f"Upload completed: {result.destination}"
                 ),
             )
+
+    def queue_upload(self) -> None:
+        source = filedialog.askopenfilename(parent=self.root, title="Choose STFS package")
+        if not source:
+            return
+        try:
+            package = inspect_stfs(source)
+            remote = str(
+                PurePosixPath(self.ftp_content_var.get().strip())
+                / package.title_id
+                / package.content_directory
+                / Path(source).name
+            )
+            job_id = self.console_sync.enqueue(
+                "upload",
+                source,
+                remote,
+                bandwidth_limit=max(0, int(self.ftp_limit_var.get() or "0")) * 1024,
+            )
+        except Exception as exc:
+            self._failed(exc)
+            return
+        self._refresh_queue_status()
+        self._run(
+            f"Transferring queued job {job_id}...",
+            lambda: self.console_sync.run_job(job_id, self._ftp_target()),
+            lambda result: self._sync_done(result),
+        )
+
+    def pause_transfer(self) -> None:
+        self.console_sync.pause()
+        self.status_var.set("Pause requested. Partial data will be kept for resume.")
+
+    def resume_transfer(self) -> None:
+        paused = [job for job in self.console_sync.list_jobs() if job["status"] == "paused"]
+        if not paused:
+            messagebox.showinfo("Console transfer", "No paused job is available.", parent=self.root)
+            return
+        job_id = int(paused[0]["id"])
+        self.console_sync.resume(job_id)
+        self._run(
+            f"Resuming job {job_id}...",
+            lambda: self.console_sync.run_job(job_id, self._ftp_target()),
+            lambda result: self._sync_done(result),
+        )
+
+    def snapshot_console(self) -> None:
+        self._run(
+            "Reading console inventory...",
+            lambda: self.console_sync.capture_inventory(self._ftp_target(), "/Hdd1"),
+            lambda snapshot_id: self._operation_done(
+                f"Read-only console snapshot {snapshot_id} saved."
+            ),
+        )
+
+    def compare_console(self) -> None:
+        snapshots = [
+            item for item in self.console_sync.list_snapshots()
+            if item["status"] == "completed"
+        ]
+        if not snapshots:
+            messagebox.showinfo(
+                "Console comparison", "Capture a console snapshot first.", parent=self.root
+            )
+            return
+        local = filedialog.askdirectory(parent=self.root, title="Choose matching PC folder")
+        if not local:
+            return
+        snapshot_id = int(snapshots[0]["id"])
+        self._run(
+            f"Comparing with snapshot {snapshot_id}...",
+            lambda: self.console_sync.compare(local, snapshot_id),
+            lambda result: messagebox.showinfo(
+                "PC and console comparison",
+                f"Only on PC: {len(result.only_on_pc)}\n"
+                f"Only on console: {len(result.only_on_console)}\n"
+                f"Different size: {len(result.size_mismatches)}\n"
+                f"Matching: {len(result.matching)}",
+                parent=self.root,
+            ),
+        )
+
+    def _sync_done(self, result: dict) -> None:
+        self._refresh_queue_status()
+        self._operation_done(
+            f"Transfer {result['status']}: {result['transferred_bytes']} / "
+            f"{result['total_bytes']} bytes."
+        )
+
+    def _refresh_queue_status(self) -> None:
+        jobs = self.console_sync.list_jobs()
+        active = sum(job["status"] in {"queued", "transferring", "paused"} for job in jobs)
+        self.queue_var.set(f"Persistent queue: {active} active, {len(jobs)} total")
 
     def run_converter(self) -> None:
         import shlex

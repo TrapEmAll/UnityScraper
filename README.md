@@ -50,8 +50,19 @@ service exposes. UnityScraper does not silently substitute HTTPS URLs.
   `Content/0000000000000000` trees.
 - Exports selected backups with per-file SHA-256 values and a preservation
   manifest.
-- Uploads packages to a configured Aurora-style FTP server.
+- Queues resumable uploads and downloads to a configured Aurora-style FTP server.
+- Captures read-only console inventories and compares PC and console content.
 - Runs a user-selected external ISO converter without bundling converter code.
+
+### Collection Intelligence and Preservation
+
+- Discovers mounted console, USB, and archive storage.
+- Parses XEX2 identity fields and imports Aurora databases read-only.
+- Compares installed content with catalogued updates using exact MediaIDs.
+- Scores collection health and creates non-destructive repair-plan previews.
+- Matches local hashes against user-imported Redump and No-Intro DAT metadata.
+- Exports preservation manifests, offline HTML reports, and fact provenance.
+- Keeps local metadata overrides separate from source-attributed knowledge.
 
 ## Install
 
@@ -120,6 +131,7 @@ Linux source setup:
 | Add Games | Import or enter TitleIDs |
 | Downloads | Review and manage download activity |
 | Backup Manager | Scan, install, verify, export, convert, and transfer owned content |
+| Collections | Identify storage, compare Title Updates, verify preservation data, and preview repairs |
 | Knowledge | Search sources, facts, citations, imports, and conflicts |
 | Archive Health | Find missing or inconsistent downloaded files |
 | Settings | Configure storage and scraper behavior |
@@ -212,6 +224,24 @@ python main.py --ftp-upload game.live --ftp-host 192.168.1.50
 See [BACKUP_MANAGER.md](BACKUP_MANAGER.md) for layouts, conflict behavior,
 manifests, FTP considerations, and external converter arguments.
 
+### Collections and Console Sync
+
+```powershell
+# Analyze a collection and create offline reports
+python main.py --analyze-collection D:\Xbox360 `
+  --collection-manifest collection.json `
+  --collection-html collection.html
+
+# Read an Aurora database without modifying it
+python main.py --aurora-db content.db --collection-manifest aurora.json
+
+# Match a local file against imported preservation DAT hashes
+python main.py --match-file game.iso
+
+# Capture a read-only console inventory
+python main.py --ftp-host 192.168.1.50 --ftp-snapshot /Hdd1
+```
+
 ## Optional REST API
 
 Start the localhost-only API:
@@ -271,6 +301,9 @@ SHA-256 file.
 - [Linux support](LINUX.md)
 - [Knowledge sources and licensing](KNOWLEDGE_SOURCES.md)
 - [Backup manager](BACKUP_MANAGER.md)
+- [Collection intelligence](COLLECTION_INTELLIGENCE.md)
+- [Console sync](CONSOLE_SYNC.md)
+- [Plugin API v1](PLUGIN_API.md)
 - [REST API](API.md)
 - [Project status](PROJECT_STATUS.md)
 - [Changelog](CHANGELOG.md)

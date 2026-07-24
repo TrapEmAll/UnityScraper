@@ -5,6 +5,10 @@
 - [README](README.md) - product overview, installation, core workflows, and CLI
 - [Backup Manager](BACKUP_MANAGER.md) - layouts, installation, exports, FTP,
   verification, and external conversion
+- [Collection Intelligence](COLLECTION_INTELLIGENCE.md) - storage discovery,
+  XEX identity, Title Update compatibility, preservation, and repair previews
+- [Console Sync](CONSOLE_SYNC.md) - persistent transfers, resume, snapshots,
+  comparison, and verification
 - [Knowledge Sources](KNOWLEDGE_SOURCES.md) - imports, provenance, caching, and
   source licensing
 - [Advanced Features](ADVANCED_FEATURES.md) - rate limits, resume, diagnostics,
@@ -19,6 +23,7 @@
 
 - [Architecture](ARCHITECTURE.md) - modules, layers, schemas, data flows, and
   packaging
+- [Plugin API v1](PLUGIN_API.md) - manifests, opt-in loading, and compatibility
 - [Contributing](CONTRIBUTING.md) - environment, tests, PR expectations, and
   adapter rules
 - [Security](SECURITY.md) - private reporting and operational boundaries

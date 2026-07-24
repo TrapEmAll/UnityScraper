@@ -8,6 +8,7 @@ The original GUI remains available as an advanced tools window.
 from __future__ import annotations
 
 import json
+import sqlite3
 import tkinter as tk
 import webbrowser
 from pathlib import Path
@@ -31,14 +32,18 @@ from app_paths import (
 )
 from app_version import DISPLAY_VERSION
 from backup_gui import BackupPage
+from collection_gui import CollectionPage
+from collection_intelligence import CollectionIntelligenceService
 from backup_service import BackupService
 from database import DatabaseManager
+from database_migrations import create_database_backup, restore_database_backup
 from diagnostics import create_diagnostics_bundle
 from knowledge_service import KnowledgeService
 from knowledge_gui import KnowledgePage
 from library_service import GameSummary, LibraryService
 from platform_support import desktop_font_family, open_path
 from setup_wizard import run_first_run_wizard
+from updater import VersionChecker
 
 
 APP_VERSION = DISPLAY_VERSION
@@ -178,6 +183,7 @@ class UnityScraperDesktop:
         self.library = LibraryService()
         self.knowledge = KnowledgeService()
         self.backups = BackupService()
+        self.collections = CollectionIntelligenceService()
         self.database = DatabaseManager()
         self.current_game: str | None = None
 
@@ -185,6 +191,9 @@ class UnityScraperDesktop:
         ensure_user_titleids_file()
 
         self.root.title(f"UnityScraper {APP_VERSION}")
+        config = self._read_config()
+        scale = max(0.8, min(2.0, float(config.get("ui_scale", 1.0))))
+        self.root.tk.call("tk", "scaling", scale)
         self.root.geometry("1220x780")
         self.root.minsize(980, 640)
         self._set_icon()
@@ -302,6 +311,7 @@ class UnityScraperDesktop:
             ("ADD GAMES", self.show_add_games),
             ("DOWNLOADS", self.show_downloads),
             ("BACKUP MANAGER", self.show_backups),
+            ("COLLECTIONS", self.show_collections),
             ("KNOWLEDGE", self.show_knowledge),
             ("ARCHIVE HEALTH", self.show_health),
             ("SETTINGS", self.show_settings),
@@ -323,6 +333,9 @@ class UnityScraperDesktop:
         self.content.rowconfigure(1, weight=1)
         self.shell.bind("<Configure>", self._resize_shell)
         self.root.after_idle(lambda: self._resize_shell(None))
+        for index, (_, callback) in enumerate(pages, start=1):
+            self.root.bind(f"<Alt-Key-{index}>", lambda _event, action=callback: action())
+        self.root.bind("<Control-l>", lambda _event: self.show_library())
         self.show_library()
 
     def _resize_shell(self, _event: tk.Event[Any] | None) -> None:
@@ -357,6 +370,15 @@ class UnityScraperDesktop:
             self.root,
             self.content,
             self.backups,
+            self._page_header,
+        )
+
+    def show_collections(self) -> None:
+        self._clear_content()
+        self.collection_page = CollectionPage(
+            self.root,
+            self.content,
+            self.collections,
             self._page_header,
         )
 
@@ -825,6 +847,7 @@ class UnityScraperDesktop:
         self.rate_var = tk.DoubleVar(value=float(config.get("rate_limit", 0.35)))
         self.timeout_var = tk.IntVar(value=int(config.get("timeout", 30)))
         self.retries_var = tk.IntVar(value=int(config.get("max_retries", 3)))
+        self.scale_var = tk.DoubleVar(value=float(config.get("ui_scale", 1.0)))
 
         ttk.Label(panel, text="Archive folder").grid(row=0, column=0, sticky=tk.W)
         ttk.Entry(panel, textvariable=self.output_var).grid(
@@ -842,6 +865,7 @@ class UnityScraperDesktop:
         ).grid(row=2, column=0, columnspan=3, sticky=tk.W)
 
         fields = (
+            ("Interface scale", self.scale_var, 0.8, 2.0),
             ("Parallel workers", self.workers_var, 1, 16),
             ("Minimum request delay", self.rate_var, 0.1, 5.0),
             ("Timeout seconds", self.timeout_var, 5, 120),
@@ -889,10 +913,14 @@ class UnityScraperDesktop:
                 "rate_limit": self.rate_var.get(),
                 "timeout": self.timeout_var.get(),
                 "max_retries": self.retries_var.get(),
+                "ui_scale": self.scale_var.get(),
             }
         )
         CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
-        messagebox.showinfo("Settings", "Settings saved.", parent=self.root)
+        self.root.tk.call("tk", "scaling", max(0.8, min(2.0, self.scale_var.get())))
+        messagebox.showinfo(
+            "Settings", "Settings saved. Interface scaling applies immediately.", parent=self.root
+        )
 
     @staticmethod
     def _read_config() -> dict[str, Any]:
@@ -934,6 +962,15 @@ class UnityScraperDesktop:
             text="Export Diagnostics ZIP",
             command=self._export_diagnostics,
         ).pack(anchor=tk.W, pady=4)
+        ttk.Button(panel, text="Back Up Database", command=self._backup_database).pack(
+            anchor=tk.W, pady=4
+        )
+        ttk.Button(panel, text="Restore Database", command=self._restore_database).pack(
+            anchor=tk.W, pady=4
+        )
+        ttk.Button(panel, text="Check for Updates", command=self._check_updates).pack(
+            anchor=tk.W, pady=4
+        )
         ttk.Button(
             panel,
             text="Open Application Data",
@@ -967,6 +1004,108 @@ class UnityScraperDesktop:
             parent=self.root,
         )
         _open_path(bundle.parent)
+
+    def _backup_database(self) -> None:
+        selected = filedialog.asksaveasfilename(
+            parent=self.root,
+            title="Back up UnityScraper database",
+            defaultextension=".db",
+            filetypes=(("SQLite database", "*.db"), ("All files", "*.*")),
+        )
+        if selected:
+            try:
+                output = create_database_backup(DATABASE_PATH, selected)
+            except (OSError, sqlite3.Error) as exc:
+                messagebox.showerror("Database backup failed", str(exc), parent=self.root)
+            else:
+                messagebox.showinfo("Database backup", f"Created:\n{output}", parent=self.root)
+
+    def _restore_database(self) -> None:
+        selected = filedialog.askopenfilename(
+            parent=self.root,
+            title="Choose UnityScraper database backup",
+            filetypes=(("SQLite database", "*.db *.bak"), ("All files", "*.*")),
+        )
+        if not selected:
+            return
+        if not messagebox.askyesno(
+            "Restore database",
+            "UnityScraper will back up the current database, restore the selected "
+            "file, and then close. Continue?",
+            parent=self.root,
+        ):
+            return
+        try:
+            fallback = create_database_backup(DATABASE_PATH)
+            restore_database_backup(selected, DATABASE_PATH)
+        except (OSError, sqlite3.Error) as exc:
+            messagebox.showerror("Database restore failed", str(exc), parent=self.root)
+            return
+        messagebox.showinfo(
+            "Database restored",
+            f"Restore completed. Previous database backup:\n{fallback}\n\n"
+            "UnityScraper will now close.",
+            parent=self.root,
+        )
+        self.root.destroy()
+
+    def _check_updates(self) -> None:
+        checker = VersionChecker(timeout=10)
+
+        def worker() -> None:
+            has_update, info = checker.check_for_updates()
+            self.root.after(0, lambda: self._show_update(checker, has_update, info))
+
+        import threading
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _show_update(self, checker: VersionChecker, has_update: bool, info: dict | None) -> None:
+        if not has_update or not info:
+            messagebox.showinfo("Updates", "You are running the latest release.", parent=self.root)
+            return
+        if not info.get("asset"):
+            messagebox.showinfo(
+                "Update available",
+                VersionChecker.format_update_message(info),
+                parent=self.root,
+            )
+            return
+        if not messagebox.askyesno(
+            "Verified update available",
+            f"UnityScraper {info['version']} is available for this platform.\n\n"
+            "Download and verify the release package now?",
+            parent=self.root,
+        ):
+            return
+        destination = filedialog.askdirectory(parent=self.root, title="Choose download folder")
+        if not destination:
+            return
+
+        def worker() -> None:
+            try:
+                package = checker.download_verified_update(info, destination)
+            except Exception as exc:
+                self.root.after(
+                    0,
+                    lambda error=exc: messagebox.showerror(
+                        "Update failed", str(error), parent=self.root
+                    ),
+                )
+            else:
+                self.root.after(
+                    0,
+                    lambda: messagebox.showinfo(
+                        "Update verified",
+                        f"Verified package downloaded to:\n{package}\n\n"
+                        "Close UnityScraper before installing it.",
+                        parent=self.root,
+                    ),
+                )
+
+        import threading
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _open_log(self) -> None:
         if GUI_LOG_PATH.exists():
