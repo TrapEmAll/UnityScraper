@@ -82,6 +82,15 @@ def _open_path(path: Path) -> None:
         messagebox.showerror("Unable to open", str(exc))
 
 
+def navigation_shortcut(index: int) -> str | None:
+    """Map the first ten navigation entries to Alt+1 through Alt+0."""
+    if 1 <= index <= 9:
+        return str(index)
+    if index == 10:
+        return "0"
+    return None
+
+
 
 class ResponsiveBackgroundBanner(ttk.Frame):
     """Responsive, center-cropped image banner for application pages."""
@@ -470,7 +479,12 @@ class UnityScraperDesktop:
         self.shell.bind("<Configure>", self._resize_shell)
         self.root.after_idle(lambda: self._resize_shell(None))
         for index, (_, callback) in enumerate(pages, start=1):
-            self.root.bind(f"<Alt-Key-{index}>", lambda _event, action=callback: action())
+            shortcut = navigation_shortcut(index)
+            if shortcut:
+                self.root.bind(
+                    f"<Alt-Key-{shortcut}>",
+                    lambda _event, action=callback: action(),
+                )
         self.root.bind("<Control-l>", lambda _event: self.show_library())
         self.show_library()
 

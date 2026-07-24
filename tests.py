@@ -34,6 +34,7 @@ from external_tools import (
 from knowledge_service import KnowledgeService
 from knowledge_sources import KnowledgeImportService, SourceInfo
 from library_service import LibraryService
+from modern_gui import navigation_shortcut
 from title_catalog import XboxUnityTitleCatalog
 from wiki_adapters import extract_article_text, parse_sitemap
 from backup_manager import (
@@ -682,6 +683,12 @@ class TestExternalTools(unittest.TestCase):
             windows=True,
         )
         self.assertEqual(preview, 'tool.exe "folder with spaces/default.xex"')
+
+    def test_tenth_navigation_page_uses_alt_zero(self):
+        self.assertEqual(navigation_shortcut(1), "1")
+        self.assertEqual(navigation_shortcut(9), "9")
+        self.assertEqual(navigation_shortcut(10), "0")
+        self.assertIsNone(navigation_shortcut(11))
 
 
 class TestConsoleModsAdapters(unittest.TestCase):
