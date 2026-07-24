@@ -7,6 +7,8 @@ import unittest
 import tempfile
 import shutil
 import json
+import hashlib
+import os
 import sys
 import time
 import zipfile
@@ -31,10 +33,11 @@ from external_tools import (
     format_command,
     split_arguments,
 )
+from external_tools_gui import bundled_xextool_path
 from knowledge_service import KnowledgeService
 from knowledge_sources import KnowledgeImportService, SourceInfo
 from library_service import LibraryService
-from modern_gui import navigation_shortcut
+from modern_gui import XEXTOOL_CREATOR, navigation_shortcut
 from title_catalog import XboxUnityTitleCatalog
 from wiki_adapters import extract_article_text, parse_sitemap
 from backup_manager import (
@@ -689,6 +692,24 @@ class TestExternalTools(unittest.TestCase):
         self.assertEqual(navigation_shortcut(9), "9")
         self.assertEqual(navigation_shortcut(10), "0")
         self.assertIsNone(navigation_shortcut(11))
+
+    def test_bundled_xextool_has_documented_binary(self):
+        binary = (
+            Path(__file__).resolve().parent
+            / "assets"
+            / "tools"
+            / "xextool"
+            / "xextool.exe"
+        )
+        digest = hashlib.sha256(binary.read_bytes()).hexdigest().upper()
+        self.assertEqual(
+            digest,
+            "D93C1B814AD6FF124834F4235BF8AAC9F09DBA8D69C335EBECC8D6EFE8D5A062",
+        )
+        self.assertEqual(bundled_xextool_path(), binary if os.name == "nt" else None)
+
+    def test_about_credits_xextool_creator(self):
+        self.assertEqual(XEXTOOL_CREATOR, "xorloser")
 
 
 class TestConsoleModsAdapters(unittest.TestCase):

@@ -9,7 +9,12 @@ a = Analysis(
     ['desktop_app.py'],
     pathex=[],
     binaries=[],
-    datas=[('JSON.txt', '.'), ('VERSION', '.'), ('assets', 'assets')],
+    datas=[
+        ('JSON.txt', '.'),
+        ('VERSION', '.'),
+        ('THIRD_PARTY_NOTICES.md', '.'),
+        ('assets', 'assets'),
+    ],
     hiddenimports=[
         'backup_gui',
         'backup_manager',

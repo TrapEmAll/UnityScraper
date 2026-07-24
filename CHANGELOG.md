@@ -7,6 +7,8 @@ Notable changes to UnityScraper are documented here. The project follows
 
 ### Added
 
+- Bundled Windows XeXTool 6.3 integration with automatic discovery, xorloser
+  attribution, provenance, checksum, and preserved third-party license.
 - External Tools workspace with XeXTool inspection presets, custom CLI
   arguments, command previews, captured output, cancellation, and timeouts.
 - Project creator attribution and a community message from TrapEmAll in About.

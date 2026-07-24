@@ -57,16 +57,20 @@ service exposes. UnityScraper does not silently substitute HTTPS URLs.
 
 ### External Tools
 
-- Runs user-supplied Xbox command-line utilities inside the desktop interface.
-- Includes a XeXTool workspace for basic or extended XEX information.
+- Runs Xbox command-line utilities inside the desktop interface.
+- Includes XeXTool 6.3 by xorloser for basic or extended XEX information on
+  Windows.
 - Supports custom executables and argument templates for other community tools.
 - Shows the exact command, captures standard output and errors, and supports
   cancellation and timeouts.
 - Executes argument vectors directly without using a command shell.
 
-Third-party binaries such as XeXTool are not bundled. Select an executable you
-obtained lawfully and trust. See [EXTERNAL_TOOLS.md](EXTERNAL_TOOLS.md) for
-setup, placeholders, platform notes, and safety guidance.
+The bundled executable was sourced from
+[XboxChef/XexToolGUI](https://github.com/XboxChef/XexToolGUI). A locally
+selected XeXTool build or another trusted utility can still be used instead.
+See [EXTERNAL_TOOLS.md](EXTERNAL_TOOLS.md) and
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for provenance, credits,
+checksums, platform notes, and safety guidance.
 
 ### Collection Intelligence and Preservation
 

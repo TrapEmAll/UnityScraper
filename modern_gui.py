@@ -52,6 +52,7 @@ from updater import VersionChecker
 
 APP_VERSION = DISPLAY_VERSION
 PROJECT_CREATOR = "TrapEmAll"
+XEXTOOL_CREATOR = "xorloser"
 COMMUNITY_MESSAGE = (
     "UnityScraper is my way of giving back to the Xbox 360 community that has "
     "kept this console alive through curiosity, preservation, homebrew, and "
@@ -1211,7 +1212,8 @@ class UnityScraperDesktop:
             text=(
                 "Xbox 360 library, knowledge, update, artwork, and "
                 "backup manager.\n"
-                "Licensed under GPL-3.0-only.\n\n"
+                "Licensed under GPL-3.0-only.\n"
+                "Bundled XeXTool 6.3 created by xorloser.\n\n"
                 + describe_storage()
             ),
             justify=tk.LEFT,
@@ -1268,6 +1270,13 @@ class UnityScraperDesktop:
             text=f"View {PROJECT_CREATOR} on GitHub",
             command=lambda: webbrowser.open(
                 f"https://github.com/{PROJECT_CREATOR}"
+            ),
+        ).pack(anchor=tk.W, pady=4)
+        ttk.Button(
+            panel,
+            text=f"XeXTool credit: {XEXTOOL_CREATOR}",
+            command=lambda: webbrowser.open(
+                "https://github.com/XboxChef/XexToolGUI"
             ),
         ).pack(anchor=tk.W, pady=4)
         ttk.Button(
