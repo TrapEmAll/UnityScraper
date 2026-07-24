@@ -39,6 +39,8 @@ Notable changes to UnityScraper are documented here. The project follows
 
 ### Changed
 
+- Cached XboxUnity titles now resolve immediately in library lists and details,
+  enrich matching rows page by page, and recover after interrupted refreshes.
 - Library rows now show `Unknown game` instead of duplicating the TitleID when
   no real game name is known.
 - Cached XboxUnity names enrich only blank, unknown, or TitleID-shaped values

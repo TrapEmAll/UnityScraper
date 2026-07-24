@@ -542,6 +542,76 @@ class TestXboxUnityTitleCatalog(unittest.TestCase):
 
         self.assertEqual(games[0].name, "Unknown game")
 
+    def test_library_uses_cached_catalog_name_before_sync_finishes(self):
+        self.database.add_titleid("53510804")
+        catalog = XboxUnityTitleCatalog(self.db_path)
+        catalog._store_page(
+            [{"TitleID": "53510804", "Name": "Hitman: Absolution", "TitleType": "360"}],
+            "http://xboxunity.net/Resources/Lib/TitleList.php?page=47",
+        )
+
+        library = LibraryService(self.db_path)
+        games = library.list_games("Hitman")
+        details = library.get_game_details("53510804")
+
+        self.assertEqual(games[0].name, "Hitman: Absolution")
+        self.assertEqual(details["title"]["name"], "Hitman: Absolution")
+
+    def test_failed_sync_keeps_page_progress_and_enriches_downloaded_names(self):
+        self.database.add_titleid("53510804")
+        session = Mock()
+        session.get.side_effect = [
+            self._response(
+                [{"TitleID": "53510804", "Name": "Hitman: Absolution"}],
+                pages=2,
+                page=0,
+            ),
+            requests.ConnectionError("connection lost"),
+        ]
+        catalog = XboxUnityTitleCatalog(
+            self.db_path,
+            session=session,
+            request_interval=0,
+        )
+
+        with self.assertRaises(requests.ConnectionError):
+            catalog.sync()
+
+        self.assertEqual(
+            self.database.get_titleid_info("53510804")["name"],
+            "Hitman: Absolution",
+        )
+        with self.database.get_connection() as connection:
+            run = connection.execute(
+                """
+                SELECT status, pages_expected, pages_fetched, items_upserted
+                FROM xboxunity_catalog_sync_runs
+                ORDER BY id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        self.assertEqual(dict(run), {
+            "status": "failed",
+            "pages_expected": 2,
+            "pages_fetched": 1,
+            "items_upserted": 1,
+        })
+
+    def test_database_startup_repairs_names_from_an_interrupted_cache(self):
+        self.database.add_titleid("53510804")
+        catalog = XboxUnityTitleCatalog(self.db_path)
+        catalog._store_page(
+            [{"TitleID": "53510804", "Name": "Hitman: Absolution"}],
+            "http://xboxunity.net/Resources/Lib/TitleList.php?page=47",
+        )
+
+        reopened = DatabaseManager(self.db_path)
+
+        self.assertEqual(
+            reopened.get_titleid_info("53510804")["name"],
+            "Hitman: Absolution",
+        )
+
     def test_non_http_xboxunity_base_url_is_rejected(self):
         with self.assertRaises(ValueError):
             XboxUnityTitleCatalog(self.db_path, base_url="https://xboxunity.net")
