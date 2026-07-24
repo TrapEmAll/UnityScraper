@@ -7,6 +7,7 @@ import unittest
 import tempfile
 import shutil
 import json
+import sys
 import time
 import zipfile
 from pathlib import Path
@@ -24,6 +25,12 @@ from consolemods_adapters import (
 )
 from knowledge_base import EntityRecord, Fact, Identifier, KnowledgeRepository
 from dat_adapters import parse_dat
+from external_tools import (
+    ExternalToolError,
+    ExternalToolRunner,
+    format_command,
+    split_arguments,
+)
 from knowledge_service import KnowledgeService
 from knowledge_sources import KnowledgeImportService, SourceInfo
 from library_service import LibraryService
@@ -615,6 +622,66 @@ class TestXboxUnityTitleCatalog(unittest.TestCase):
     def test_non_http_xboxunity_base_url_is_rejected(self):
         with self.assertRaises(ValueError):
             XboxUnityTitleCatalog(self.db_path, base_url="https://xboxunity.net")
+
+
+class TestExternalTools(unittest.TestCase):
+    """Test shell-free execution for user-supplied command-line tools."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.input_path = Path(self.temp_dir) / "default.xex"
+        self.input_path.write_bytes(b"XEX2")
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir)
+
+    def test_xextool_template_splits_into_an_argument_vector(self):
+        self.assertEqual(
+            split_arguments('-l "{input}"', windows=True),
+            ["-l", "{input}"],
+        )
+
+    def test_runner_substitutes_input_without_shell_interpretation(self):
+        runner = ExternalToolRunner()
+        marker = "value; echo this-is-data"
+
+        result = runner.run(
+            sys.executable,
+            [
+                "-c",
+                "import sys; print(sys.argv[1]); print(sys.argv[2])",
+                marker,
+                "{input}",
+            ],
+            input_path=self.input_path,
+        )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertIn(marker, result.stdout)
+        self.assertIn(str(self.input_path.resolve()), result.stdout)
+        self.assertFalse(result.cancelled)
+
+    def test_runner_rejects_missing_executable_and_input(self):
+        runner = ExternalToolRunner()
+        with self.assertRaises(ExternalToolError):
+            runner.build_command(
+                Path(self.temp_dir) / "missing.exe",
+                ["{input}"],
+                input_path=self.input_path,
+            )
+        with self.assertRaises(ExternalToolError):
+            runner.build_command(
+                sys.executable,
+                ["{input}"],
+                input_path=Path(self.temp_dir) / "missing.xex",
+            )
+
+    def test_command_preview_quotes_paths(self):
+        preview = format_command(
+            ("tool.exe", "folder with spaces/default.xex"),
+            windows=True,
+        )
+        self.assertEqual(preview, 'tool.exe "folder with spaces/default.xex"')
 
 
 class TestConsoleModsAdapters(unittest.TestCase):
@@ -1330,6 +1397,7 @@ def run_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestUnityScraper))
     suite.addTests(loader.loadTestsFromTestCase(TestDatabaseManager))
     suite.addTests(loader.loadTestsFromTestCase(TestXboxUnityTitleCatalog))
+    suite.addTests(loader.loadTestsFromTestCase(TestExternalTools))
     suite.addTests(loader.loadTestsFromTestCase(TestConsoleModsAdapters))
     suite.addTests(loader.loadTestsFromTestCase(TestKnowledgeApplication))
     suite.addTests(loader.loadTestsFromTestCase(TestDownloadProgress))
