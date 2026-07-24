@@ -37,6 +37,11 @@ backup-management, and source-attributed knowledge application.
   bandwidth limits, verified final sizes, read-only console snapshots, and no
   stored passwords.
 - Explicit external converter integration for user-owned ISO images.
+- Read-only profile and save discovery with public STFS ownership metadata,
+  masked identifiers, cached game-name resolution, duplicate and mismatch
+  reporting, verified snapshots, manifests, and conflict-safe restore.
+- Credited GPLv3 technical lineage from Dalavin / DJ SkunkieButt's X360
+  library and Le Fluffie without bundling its updater, keys, or executable.
 - Local-by-default REST API with token-required remote binding, restricted
   browser origins, validated settings, and current version reporting.
 - Cross-platform CI, Windows packaging checks, tagged release archives,
@@ -72,6 +77,9 @@ backup-management, and source-attributed knowledge application.
   memory and omitted from database records.
 - Remote API access requires a token but the built-in server does not provide
   TLS. Remote deployments need a trusted network or TLS reverse proxy.
+- Profile editing, achievement modification, ownership rewriting, and CON
+  re-signing remain disabled until complete package verification and reliable
+  cross-platform signing support are available.
 
 ## Future Work
 
@@ -79,3 +87,5 @@ backup-management, and source-attributed knowledge application.
 - Add optional scheduled knowledge refreshes.
 - Validate console resume behavior against a broader matrix of dashboard FTP
   servers and add opt-in remote hash verification where servers expose it.
+- Add read-only GPD/achievement views, Xenia save mapping, and audited
+  profile-migration previews before considering package mutation.

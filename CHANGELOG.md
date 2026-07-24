@@ -7,6 +7,13 @@ Notable changes to UnityScraper are documented here. The project follows
 
 ### Added
 
+- Profiles & Saves workspace with read-only Content-tree discovery, masked
+  profile inventory, STFS ownership metadata, save search, duplicate and
+  mismatch reporting, verified snapshots, manifests, and conflict-safe restore.
+- Additive schema migration 6 for profile scans, profiles, saves, snapshots,
+  snapshot files, and auditable operations.
+- Dalavin / DJ SkunkieButt attribution and preserved GPLv3 provenance for the
+  X360 library and Le Fluffie technical reference.
 - Bundled Windows XeXTool 6.3 integration with automatic discovery, xorloser
   attribution, provenance, checksum, and preserved third-party license.
 - External Tools workspace with XeXTool inspection presets, custom CLI

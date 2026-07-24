@@ -20,11 +20,13 @@ from typing import Callable, Iterable, Iterator, Optional
 
 STFS_MAGICS = {b"CON ", b"LIVE", b"PIRS"}
 CONTENT_TYPES = {
+    0x00000001: ("Saved Game", "00000001"),
     0x00000002: ("DLC", "00000002"),
     0x00005000: ("Original Xbox Game", "00005000"),
     0x00007000: ("Xbox 360 Game", "00007000"),
     0x000B0000: ("Title Update", "000B0000"),
     0x000D0000: ("Xbox Live Arcade", "000D0000"),
+    0x00010000: ("Profile", "00010000"),
 }
 GAME_CONTENT_DIRECTORIES = {"00005000", "00007000", "000D0000"}
 SUPPORT_CONTENT_DIRECTORIES = {"00000002", "000B0000"}
@@ -66,6 +68,10 @@ class StfsPackage:
     display_name: str
     title_name: str
     size: int
+    save_game_id: str
+    console_id: str
+    profile_id: str
+    device_id: str
 
 
 @dataclass(frozen=True)
@@ -185,6 +191,10 @@ def inspect_stfs(path: str | Path) -> StfsPackage:
         display_name=_read_utf16be(header[0x411:0x511]),
         title_name=_read_utf16be(header[0x1691:0x1791]),
         size=package_path.stat().st_size,
+        save_game_id=header[0x368:0x36C].hex().upper(),
+        console_id=header[0x36C:0x371].hex().upper(),
+        profile_id=header[0x371:0x379].hex().upper(),
+        device_id=header[0x3FD:0x411].hex().upper(),
     )
 
 

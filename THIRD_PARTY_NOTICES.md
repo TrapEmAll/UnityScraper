@@ -21,3 +21,20 @@ preserved at
 UnityScraper's GUI integration is independent code. Users may select a
 different lawfully obtained XeXTool build or another command-line utility.
 
+## X360 Library and Le Fluffie
+
+- **Creator:** Dalavin, also known as DJ SkunkieButt and DJ Shepherd
+- **Purpose:** Historical Xbox 360 STFS, SVOD, FATX, GPD, profile, and account
+  research and tooling
+- **Archived source:** [mtolly/X360](https://github.com/mtolly/X360)
+- **License:** GNU General Public License version 3
+
+UnityScraper's profile and save implementation is new Python code informed by
+the public package/profile model and field layout documented in the X360
+library and Le Fluffie source. The original GPL text is preserved at
+`assets/references/lefluffie/X360-GPL-3.0.txt`.
+
+UnityScraper does not include Le Fluffie's executable, updater, embedded key
+resources, account-modification code, or artwork. The application credits
+Dalavin prominently and links to the archived corresponding source.
+

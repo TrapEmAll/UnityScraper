@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 def _now() -> str:
@@ -66,6 +66,7 @@ def ensure_application_schema(connection: sqlite3.Connection) -> int:
         (3, "console synchronization", _migration_console_sync),
         (4, "user overrides and recovery", _migration_reliability),
         (5, "XboxUnity title catalog", _migration_xboxunity_catalog),
+        (6, "profile and save management", _migration_profiles_and_saves),
     )
     for version, name, migration in migrations:
         if version in applied:
@@ -275,6 +276,113 @@ def _migration_xboxunity_catalog(connection: sqlite3.Connection) -> None:
             pages_fetched INTEGER NOT NULL DEFAULT 0,
             items_upserted INTEGER NOT NULL DEFAULT 0,
             error_message TEXT
+        );
+        """
+    )
+
+
+def _migration_profiles_and_saves(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS profile_scan_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_root TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            status TEXT NOT NULL DEFAULT 'running',
+            profile_count INTEGER NOT NULL DEFAULT 0,
+            save_count INTEGER NOT NULL DEFAULT 0,
+            warning_count INTEGER NOT NULL DEFAULT 0,
+            warnings_json TEXT,
+            error_message TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS xbox_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            profile_id TEXT NOT NULL,
+            gamertag TEXT,
+            source_path TEXT NOT NULL,
+            package_path TEXT,
+            package_sha256 TEXT,
+            console_id TEXT,
+            device_id TEXT,
+            profile_kind TEXT NOT NULL DEFAULT 'unknown',
+            package_status TEXT NOT NULL DEFAULT 'unverified',
+            first_seen_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            metadata_json TEXT,
+            UNIQUE(profile_id, source_path)
+        );
+        CREATE INDEX IF NOT EXISTS idx_xbox_profiles_profile_id
+            ON xbox_profiles(profile_id);
+
+        CREATE TABLE IF NOT EXISTS profile_saves (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            profile_id TEXT NOT NULL,
+            titleid TEXT NOT NULL,
+            name TEXT NOT NULL,
+            source_path TEXT NOT NULL UNIQUE,
+            package_magic TEXT,
+            content_type INTEGER,
+            save_game_id TEXT,
+            embedded_profile_id TEXT,
+            console_id TEXT,
+            device_id TEXT,
+            size INTEGER NOT NULL DEFAULT 0,
+            modified_at TEXT,
+            sha256 TEXT,
+            status TEXT NOT NULL DEFAULT 'unverified',
+            first_seen_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            metadata_json TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_profile_saves_owner
+            ON profile_saves(profile_id, titleid);
+        CREATE INDEX IF NOT EXISTS idx_profile_saves_sha256
+            ON profile_saves(sha256);
+
+        CREATE TABLE IF NOT EXISTS save_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            profile_id TEXT,
+            label TEXT,
+            source_root TEXT NOT NULL,
+            snapshot_path TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL,
+            file_count INTEGER NOT NULL DEFAULT 0,
+            total_size INTEGER NOT NULL DEFAULT 0,
+            manifest_sha256 TEXT,
+            status TEXT NOT NULL DEFAULT 'creating',
+            notes TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS save_snapshot_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_id INTEGER NOT NULL,
+            source_path TEXT NOT NULL,
+            relative_path TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
+            size INTEGER NOT NULL,
+            modified_at TEXT,
+            item_kind TEXT NOT NULL,
+            titleid TEXT,
+            restore_status TEXT,
+            UNIQUE(snapshot_id, relative_path),
+            FOREIGN KEY(snapshot_id) REFERENCES save_snapshots(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_save_snapshot_files_snapshot
+            ON save_snapshot_files(snapshot_id);
+
+        CREATE TABLE IF NOT EXISTS profile_save_operations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            operation_type TEXT NOT NULL,
+            target_path TEXT,
+            snapshot_id INTEGER,
+            status TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            details_json TEXT,
+            error_message TEXT,
+            FOREIGN KEY(snapshot_id) REFERENCES save_snapshots(id)
         );
         """
     )

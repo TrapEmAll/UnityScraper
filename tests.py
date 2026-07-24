@@ -37,7 +37,7 @@ from external_tools_gui import bundled_xextool_path
 from knowledge_service import KnowledgeService
 from knowledge_sources import KnowledgeImportService, SourceInfo
 from library_service import LibraryService
-from modern_gui import XEXTOOL_CREATOR, navigation_shortcut
+from modern_gui import LE_FLUFFIE_CREATOR, XEXTOOL_CREATOR, navigation_shortcut
 from title_catalog import XboxUnityTitleCatalog
 from wiki_adapters import extract_article_text, parse_sitemap
 from backup_manager import (
@@ -58,6 +58,7 @@ from api import UnityScraperAPI
 from app_version import DISPLAY_VERSION
 from app_paths import resolve_storage_paths
 from platform_support import desktop_font_family, path_opener_command
+from profile_manager import ProfileSaveManager, find_content_root, mask_identifier
 
 
 class TestPlatformSupport(unittest.TestCase):
@@ -711,6 +712,9 @@ class TestExternalTools(unittest.TestCase):
     def test_about_credits_xextool_creator(self):
         self.assertEqual(XEXTOOL_CREATOR, "xorloser")
 
+    def test_about_credits_le_fluffie_creator(self):
+        self.assertEqual(LE_FLUFFIE_CREATOR, "Dalavin (DJ SkunkieButt)")
+
 
 class TestConsoleModsAdapters(unittest.TestCase):
     """Test ConsoleMods parsing helpers."""
@@ -1054,6 +1058,10 @@ class TestBackupManager(unittest.TestCase):
         mediaid="12345678",
         content_type=0x000D0000,
         title="Test Game",
+        profile_id="0000000000000000",
+        console_id="0000000000",
+        device_id="0000000000000000000000000000000000000000",
+        save_game_id="00000000",
     ):
         path = self.temp_dir / name
         header = bytearray(0x1791)
@@ -1063,6 +1071,10 @@ class TestBackupManager(unittest.TestCase):
         header[0x360:0x364] = bytes.fromhex(titleid)
         header[0x366] = 1
         header[0x367] = 1
+        header[0x368:0x36C] = bytes.fromhex(save_game_id)
+        header[0x36C:0x371] = bytes.fromhex(console_id)
+        header[0x371:0x379] = bytes.fromhex(profile_id)
+        header[0x3FD:0x411] = bytes.fromhex(device_id)
         encoded = title.encode("utf-16-be")
         header[0x411:0x411 + len(encoded)] = encoded
         header[0x1691:0x1691 + len(encoded)] = encoded
@@ -1077,6 +1089,22 @@ class TestBackupManager(unittest.TestCase):
         destination = package_destination(package, self.temp_dir / "target")
         self.assertIn("000D0000", destination.parts)
         self.assertEqual(destination.parent.parent.name, "4D5307E6")
+
+    def test_inspect_stfs_reads_profile_ownership_fields(self):
+        package = inspect_stfs(
+            self._stfs(
+                content_type=0x00000001,
+                profile_id="E00015BF00008BD2",
+                console_id="0102030405",
+                device_id="11" * 20,
+                save_game_id="12345678",
+            )
+        )
+        self.assertEqual(package.content_label, "Saved Game")
+        self.assertEqual(package.profile_id, "E00015BF00008BD2")
+        self.assertEqual(package.console_id, "0102030405")
+        self.assertEqual(package.device_id, "11" * 20)
+        self.assertEqual(package.save_game_id, "12345678")
 
     def test_rejects_unknown_stfs_content_type(self):
         with self.assertRaises(InvalidPackageError):
@@ -1292,6 +1320,111 @@ class TestRestAPI(unittest.TestCase):
         self.assertFalse(self.scraper.config.use_https)
 
 
+class TestProfileSaveManager(unittest.TestCase):
+    """Test read-only profile discovery and conflict-safe snapshots."""
+
+    PROFILE_ID = "E00015BF00008BD2"
+    TITLE_ID = "53510804"
+
+    def setUp(self):
+        self.temp_dir = Path(tempfile.mkdtemp())
+        self.content = self.temp_dir / "device" / "Content"
+        self.profile_root = self.content / self.PROFILE_ID
+        self.profile_package = (
+            self.profile_root / "FFFE07D1" / "00010000" / self.PROFILE_ID
+        )
+        self.save_path = (
+            self.profile_root / self.TITLE_ID / "00000001" / "savegame"
+        )
+        self._write_stfs(
+            self.profile_package,
+            titleid="FFFE07D1",
+            content_type=0x00010000,
+            title="TestPlayer",
+        )
+        self._write_stfs(
+            self.save_path,
+            titleid=self.TITLE_ID,
+            content_type=0x00000001,
+            title="Hitman: Absolution Save",
+        )
+        self.manager = ProfileSaveManager(
+            self.temp_dir / "profiles.db",
+            self.temp_dir / "snapshots",
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir)
+
+    def _write_stfs(self, path, *, titleid, content_type, title):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        header = bytearray(0x1791)
+        header[:4] = b"CON "
+        header[0x344:0x348] = content_type.to_bytes(4, "big")
+        header[0x354:0x358] = bytes.fromhex("12345678")
+        header[0x360:0x364] = bytes.fromhex(titleid)
+        header[0x368:0x36C] = bytes.fromhex("11223344")
+        header[0x36C:0x371] = bytes.fromhex("0102030405")
+        header[0x371:0x379] = bytes.fromhex(self.PROFILE_ID)
+        header[0x3FD:0x411] = bytes.fromhex("22" * 20)
+        encoded = title.encode("utf-16-be")
+        header[0x411 : 0x411 + len(encoded)] = encoded
+        header[0x1691 : 0x1691 + len(encoded)] = encoded
+        path.write_bytes(header + b"profile-save-payload")
+
+    def test_content_root_and_masking(self):
+        self.assertEqual(find_content_root(self.temp_dir / "device"), self.content)
+        masked = mask_identifier(self.PROFILE_ID)
+        self.assertTrue(masked.endswith("8BD2"))
+        self.assertNotIn(self.PROFILE_ID, masked)
+
+    def test_scan_indexes_profile_and_save_without_modifying_source(self):
+        original = self.save_path.read_bytes()
+        result = self.manager.scan(self.content)
+        profiles = self.manager.list_profiles()
+        saves = self.manager.list_saves(self.PROFILE_ID)
+
+        self.assertEqual((len(result.profiles), len(result.saves)), (1, 1))
+        self.assertEqual(profiles[0]["gamertag"], "TestPlayer")
+        self.assertEqual(profiles[0]["save_count"], 1)
+        self.assertEqual(saves[0]["titleid"], self.TITLE_ID)
+        self.assertEqual(saves[0]["status"], "header-valid")
+        self.assertEqual(self.save_path.read_bytes(), original)
+
+    def test_snapshot_restore_preserves_destination_conflict(self):
+        self.manager.scan(self.content)
+        save_id = int(self.manager.list_saves(self.PROFILE_ID)[0]["id"])
+        snapshot_id = self.manager.create_snapshot(
+            self.PROFILE_ID,
+            save_ids=[save_id],
+            label="Before transfer",
+        )
+        snapshot = self.manager.list_snapshots()[0]
+        self.assertEqual(snapshot["status"], "complete")
+        self.assertEqual(snapshot["file_count"], 1)
+
+        destination = self.temp_dir / "restore"
+        conflict = destination / self.TITLE_ID / "00000001" / "savegame"
+        conflict.parent.mkdir(parents=True)
+        conflict.write_bytes(b"keep this copy")
+
+        result = self.manager.restore_snapshot(snapshot_id, destination)
+        restored = conflict.with_name("savegame.restored-1")
+        self.assertEqual(conflict.read_bytes(), b"keep this copy")
+        self.assertEqual(restored.read_bytes(), self.save_path.read_bytes())
+        self.assertEqual((result.restored, result.conflicts), (1, 1))
+
+    def test_profile_snapshot_contains_manifest_and_every_profile_file(self):
+        self.manager.scan(self.content)
+        snapshot_id = self.manager.create_snapshot(self.PROFILE_ID)
+        snapshot = self.manager.list_snapshots()[0]
+        manifest = Path(snapshot["snapshot_path"]) / "manifest.json"
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual(snapshot_id, payload["snapshot_id"])
+        self.assertEqual(len(payload["files"]), 2)
+        self.assertIn("DJ SkunkieButt", payload["attribution"])
+
+
 class TestUnifiedV1Foundation(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
@@ -1315,12 +1448,16 @@ class TestUnifiedV1Foundation(unittest.TestCase):
             versions = connection.execute(
                 "SELECT version FROM app_schema_migrations ORDER BY version"
             ).fetchall()
-        self.assertEqual([row[0] for row in versions], [1, 2, 3, 4, 5])
+        self.assertEqual([row[0] for row in versions], [1, 2, 3, 4, 5, 6])
         self.assertIn("collection_snapshots", tables)
         self.assertIn("preservation_matches", tables)
         self.assertIn("console_transfer_jobs", tables)
         self.assertIn("metadata_overrides", tables)
         self.assertIn("xboxunity_title_catalog", tables)
+        self.assertIn("xbox_profiles", tables)
+        self.assertIn("profile_saves", tables)
+        self.assertIn("save_snapshots", tables)
+        self.assertIn("profile_save_operations", tables)
 
     def test_xex_execution_info_is_parsed(self):
         from backup_manager import inspect_xex
@@ -1434,6 +1571,7 @@ def run_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestIntegration))
     suite.addTests(loader.loadTestsFromTestCase(TestBackupManager))
     suite.addTests(loader.loadTestsFromTestCase(TestRestAPI))
+    suite.addTests(loader.loadTestsFromTestCase(TestProfileSaveManager))
     suite.addTests(loader.loadTestsFromTestCase(TestUnifiedV1Foundation))
     
     # Run tests
