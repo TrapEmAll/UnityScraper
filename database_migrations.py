@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def _now() -> str:
@@ -65,6 +65,7 @@ def ensure_application_schema(connection: sqlite3.Connection) -> int:
         (2, "preservation records", _migration_preservation),
         (3, "console synchronization", _migration_console_sync),
         (4, "user overrides and recovery", _migration_reliability),
+        (5, "XboxUnity title catalog", _migration_xboxunity_catalog),
     )
     for version, name, migration in migrations:
         if version in applied:
@@ -237,6 +238,43 @@ def _migration_reliability(connection: sqlite3.Connection) -> None:
             key TEXT PRIMARY KEY,
             value_json TEXT NOT NULL,
             updated_at TEXT NOT NULL
+        );
+        """
+    )
+
+
+def _migration_xboxunity_catalog(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS xboxunity_title_catalog (
+            titleid TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            hb_titleid TEXT,
+            title_type TEXT,
+            link_enabled INTEGER NOT NULL DEFAULT 0,
+            covers_count INTEGER NOT NULL DEFAULT 0,
+            updates_count INTEGER NOT NULL DEFAULT 0,
+            media_id_count INTEGER NOT NULL DEFAULT 0,
+            user_count INTEGER NOT NULL DEFAULT 0,
+            newest_content TEXT,
+            source_url TEXT NOT NULL,
+            raw_json TEXT NOT NULL,
+            fetched_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_xboxunity_catalog_name
+            ON xboxunity_title_catalog(name COLLATE NOCASE);
+        CREATE INDEX IF NOT EXISTS idx_xboxunity_catalog_type
+            ON xboxunity_title_catalog(title_type);
+
+        CREATE TABLE IF NOT EXISTS xboxunity_catalog_sync_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            status TEXT NOT NULL,
+            pages_expected INTEGER NOT NULL DEFAULT 0,
+            pages_fetched INTEGER NOT NULL DEFAULT 0,
+            items_upserted INTEGER NOT NULL DEFAULT 0,
+            error_message TEXT
         );
         """
     )

@@ -26,6 +26,8 @@ from knowledge_base import EntityRecord, Fact, Identifier, KnowledgeRepository
 from dat_adapters import parse_dat
 from knowledge_service import KnowledgeService
 from knowledge_sources import KnowledgeImportService, SourceInfo
+from library_service import LibraryService
+from title_catalog import XboxUnityTitleCatalog
 from wiki_adapters import extract_article_text, parse_sitemap
 from backup_manager import (
     BackupItem,
@@ -442,6 +444,107 @@ class TestDatabaseManager(unittest.TestCase):
         info = self.db.get_titleid_info("555308C5")
         self.assertEqual(info["name"], "User Name")
         self.assertEqual(info["publisher"], "User Publisher")
+
+
+class TestXboxUnityTitleCatalog(unittest.TestCase):
+    """Test persistent, HTTP-only XboxUnity title autocomplete data."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = Path(self.temp_dir) / "catalog.db"
+        self.database = DatabaseManager(self.db_path)
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir)
+
+    @staticmethod
+    def _response(items, *, pages=1, page=0):
+        response = Mock()
+        response.url = (
+            "http://xboxunity.net/Resources/Lib/TitleList.php"
+            f"?category=0&count=100&page={page}"
+        )
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "Items": items,
+            "Count": len(items),
+            "Pages": pages,
+            "Page": page,
+        }
+        return response
+
+    def test_sync_caches_every_page_and_searches_name_or_titleid(self):
+        session = Mock()
+        session.get.side_effect = [
+            self._response(
+                [
+                    {
+                        "TitleID": "4D5307E6",
+                        "Name": "Halo 3",
+                        "TitleType": "360",
+                        "Covers": "40",
+                        "Updates": "12",
+                    }
+                ],
+                pages=2,
+                page=0,
+            ),
+            self._response(
+                [
+                    {
+                        "TitleID": "4D53085B",
+                        "Name": "Halo: Reach",
+                        "TitleType": "360",
+                        "Covers": "28",
+                        "Updates": "11",
+                    }
+                ],
+                pages=2,
+                page=1,
+            ),
+        ]
+        catalog = XboxUnityTitleCatalog(
+            self.db_path,
+            session=session,
+            request_interval=0,
+        )
+
+        result = catalog.sync()
+
+        self.assertEqual(result.pages_fetched, 2)
+        self.assertEqual(catalog.count(), 2)
+        self.assertEqual(catalog.search("reach")[0].titleid, "4D53085B")
+        self.assertEqual(catalog.search("4D5307")[0].name, "Halo 3")
+        self.assertTrue(session.get.call_args_list[0].args[0].startswith("http://"))
+
+    def test_catalog_enrichment_never_replaces_a_known_name(self):
+        catalog = XboxUnityTitleCatalog(self.db_path)
+        catalog._store_page(
+            [
+                {"TitleID": "4D5307E6", "Name": "Halo 3", "TitleType": "360"},
+                {"TitleID": "4D53085B", "Name": "Halo: Reach", "TitleType": "360"},
+            ],
+            "http://xboxunity.net/Resources/Lib/TitleList.php?page=0",
+        )
+        self.database.add_titleid("4D5307E6", name="4D5307E6")
+        self.database.add_titleid("4D53085B", name="My Preferred Reach Name")
+
+        self.assertEqual(self.database.get_titleid_info("4D5307E6")["name"], "Halo 3")
+        self.assertEqual(
+            self.database.get_titleid_info("4D53085B")["name"],
+            "My Preferred Reach Name",
+        )
+
+    def test_library_does_not_display_titleid_as_the_game_name(self):
+        self.database.add_titleid("555308C5")
+
+        games = LibraryService(self.db_path).list_games()
+
+        self.assertEqual(games[0].name, "Unknown game")
+
+    def test_non_http_xboxunity_base_url_is_rejected(self):
+        with self.assertRaises(ValueError):
+            XboxUnityTitleCatalog(self.db_path, base_url="https://xboxunity.net")
 
 
 class TestConsoleModsAdapters(unittest.TestCase):
@@ -1047,11 +1150,12 @@ class TestUnifiedV1Foundation(unittest.TestCase):
             versions = connection.execute(
                 "SELECT version FROM app_schema_migrations ORDER BY version"
             ).fetchall()
-        self.assertEqual([row[0] for row in versions], [1, 2, 3, 4])
+        self.assertEqual([row[0] for row in versions], [1, 2, 3, 4, 5])
         self.assertIn("collection_snapshots", tables)
         self.assertIn("preservation_matches", tables)
         self.assertIn("console_transfer_jobs", tables)
         self.assertIn("metadata_overrides", tables)
+        self.assertIn("xboxunity_title_catalog", tables)
 
     def test_xex_execution_info_is_parsed(self):
         from backup_manager import inspect_xex
@@ -1155,6 +1259,7 @@ def run_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestRateLimiter))
     suite.addTests(loader.loadTestsFromTestCase(TestUnityScraper))
     suite.addTests(loader.loadTestsFromTestCase(TestDatabaseManager))
+    suite.addTests(loader.loadTestsFromTestCase(TestXboxUnityTitleCatalog))
     suite.addTests(loader.loadTestsFromTestCase(TestConsoleModsAdapters))
     suite.addTests(loader.loadTestsFromTestCase(TestKnowledgeApplication))
     suite.addTests(loader.loadTestsFromTestCase(TestDownloadProgress))

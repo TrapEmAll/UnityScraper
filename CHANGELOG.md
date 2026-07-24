@@ -7,6 +7,10 @@ Notable changes to UnityScraper are documented here. The project follows
 
 ### Added
 
+- Offline XboxUnity title catalog with background refresh, sync history,
+  TitleID/name autocomplete, and a manual/CLI refresh path.
+- Additive schema migration 5 for cached XboxUnity titles and catalog sync
+  runs.
 - Versioned additive migrations for collection snapshots, preservation
   matches, repair plans, console inventories, resumable jobs, overrides, and
   recovery state.
@@ -35,6 +39,11 @@ Notable changes to UnityScraper are documented here. The project follows
 
 ### Changed
 
+- Library rows now show `Unknown game` instead of duplicating the TitleID when
+  no real game name is known.
+- Cached XboxUnity names enrich only blank, unknown, or TitleID-shaped values
+  and never replace an existing preferred title.
+- Library queries now close SQLite handles immediately after use.
 - Version advanced to `1.0.0-beta.1`.
 - Download queues now use atomic writes and recover interrupted items.
 - Update checks select a platform artifact and require its SHA-256 sidecar

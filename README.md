@@ -21,6 +21,7 @@ archives before running large imports or transfers.
 ### Library and Downloads
 
 - Collects XboxUnity cover and Title Update metadata.
+- Caches the XboxUnity title catalog for offline name and TitleID autocomplete.
 - Reviews results before selectively downloading files.
 - Tracks pending, downloaded, failed, and verified content.
 - Supports retries, rate limiting, bandwidth limits, and resumable downloads.
@@ -128,7 +129,7 @@ Linux source setup:
 | Workspace | Purpose |
 | --- | --- |
 | Library | Browse games, covers, MediaIDs, and available updates |
-| Add Games | Import or enter TitleIDs |
+| Add Games | Search cached game names, select TitleIDs, or import lists |
 | Downloads | Review and manage download activity |
 | Backup Manager | Scan, install, verify, export, convert, and transfer owned content |
 | Collections | Identify storage, compare Title Updates, verify preservation data, and preview repairs |
@@ -173,6 +174,9 @@ python main.py --help
 ### XboxUnity Metadata
 
 ```powershell
+# Refresh every XboxUnity title name for local autocomplete
+python main.py --sync-title-catalog
+
 # Collect metadata for one or more TitleIDs
 python main.py 4D5307E6 --metadata-only
 
@@ -185,6 +189,15 @@ python main.py --verify-integrity
 
 Providing TitleIDs without `--metadata-only` starts the download workflow.
 Review the destination and settings before doing this.
+
+The desktop application refreshes the XboxUnity title catalog in the
+background when the local copy is missing or more than seven days old. The
+**Add Games** search box always queries SQLite, so suggestions remain fast and
+available offline. Suggestions include the game name, TitleID, and content
+type. Use **Refresh Catalog** on that page to request an immediate update.
+
+Catalog names fill only blank, unknown, or accidentally TitleID-shaped game
+names. Existing user names and better source-attributed metadata are preserved.
 
 ### Knowledge Sources
 

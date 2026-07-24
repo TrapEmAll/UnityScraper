@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Optional
@@ -52,7 +53,12 @@ class LibraryService:
         query = """
             SELECT
                 t.titleid,
-                COALESCE(NULLIF(t.name, ''), t.titleid) AS name,
+                CASE
+                    WHEN t.name IS NULL OR TRIM(t.name) = ''
+                         OR UPPER(TRIM(t.name)) = UPPER(t.titleid)
+                    THEN 'Unknown game'
+                    ELSE t.name
+                END AS name,
                 COALESCE(t.publisher, '') AS publisher,
                 COALESCE(t.last_scraped, '') AS last_scraped,
                 COUNT(DISTINCT c.id) AS covers_total,
@@ -83,7 +89,7 @@ class LibraryService:
             ORDER BY name COLLATE NOCASE, t.titleid
         """
 
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             rows = connection.execute(query, parameters).fetchall()
 
         return [
@@ -106,7 +112,7 @@ class LibraryService:
         if not self.database_path.exists():
             return {}
 
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             title = connection.execute(
                 "SELECT * FROM titleids WHERE titleid = ?",
                 (titleid,),
@@ -174,7 +180,7 @@ class LibraryService:
             ),
         }
 
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             return {
                 name: int(connection.execute(statement).fetchone()[0] or 0)
                 for name, statement in sql.items()
@@ -191,7 +197,7 @@ class LibraryService:
         if not self.database_path.exists():
             return []
 
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             update_rows = connection.execute(
                 """
                 SELECT
@@ -236,7 +242,7 @@ class LibraryService:
         if not self.database_path.exists():
             return report
 
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             rows = connection.execute(
                 """
                 SELECT 'cover' AS item_type, id, titleid, file_path, file_size

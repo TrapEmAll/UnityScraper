@@ -8,14 +8,16 @@ The original GUI remains available as an advanced tools window.
 from __future__ import annotations
 
 import json
+import queue
 import sqlite3
+import threading
 import tkinter as tk
 import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+from typing import Any, Callable
 
 from PIL import Image, ImageOps, ImageTk
-from typing import Any
 
 from app_paths import (
     BASE_DIR,
@@ -43,6 +45,7 @@ from knowledge_gui import KnowledgePage
 from library_service import GameSummary, LibraryService
 from platform_support import desktop_font_family, open_path
 from setup_wizard import run_first_run_wizard
+from title_catalog import TitleSuggestion, XboxUnityTitleCatalog
 from updater import VersionChecker
 
 
@@ -175,6 +178,124 @@ class ResponsiveBackgroundBanner(ttk.Frame):
         return background
 
 
+class TitleAutocomplete(ttk.Frame):
+    """Entry with a non-blocking local title suggestion popup."""
+
+    def __init__(
+        self,
+        parent: tk.Misc,
+        search: Callable[[str], list[TitleSuggestion]],
+        on_select: Callable[[TitleSuggestion], None],
+    ) -> None:
+        super().__init__(parent)
+        self.search = search
+        self.on_select = on_select
+        self.variable = tk.StringVar()
+        self.suggestions: list[TitleSuggestion] = []
+        self._search_job: str | None = None
+
+        self.entry = ttk.Entry(self, textvariable=self.variable)
+        self.entry.pack(fill=tk.X, expand=True)
+        self.entry.bind("<KeyRelease>", self._key_released)
+        self.entry.bind("<Down>", self._focus_suggestions)
+        self.entry.bind("<Return>", self._accept_first)
+        self.entry.bind("<Escape>", lambda _event: self.hide())
+        self.entry.bind("<FocusOut>", self._queue_hide)
+
+        self.popup = tk.Toplevel(self)
+        self.popup.withdraw()
+        self.popup.overrideredirect(True)
+        self.popup.configure(background=BORDER)
+        self.popup.transient(self.winfo_toplevel())
+        self.listbox = tk.Listbox(
+            self.popup,
+            height=8,
+            background="#070b08",
+            foreground=TEXT,
+            selectbackground="#315f12",
+            selectforeground=TEXT,
+            highlightthickness=1,
+            highlightbackground=BORDER,
+            relief=tk.FLAT,
+            font=(UI_FONT, 10),
+            activestyle="none",
+        )
+        self.listbox.pack(fill=tk.BOTH, expand=True)
+        self.listbox.bind("<Return>", self._accept)
+        self.listbox.bind("<ButtonRelease-1>", self._accept)
+        self.listbox.bind("<Double-Button-1>", self._accept)
+        self.listbox.bind("<Escape>", lambda _event: self.hide())
+        self.listbox.bind("<FocusOut>", self._queue_hide)
+
+    def _key_released(self, event: tk.Event[Any]) -> None:
+        if event.keysym in {"Up", "Down", "Return", "Escape"}:
+            return
+        if self._search_job is not None:
+            self.after_cancel(self._search_job)
+        self._search_job = self.after(120, self._refresh)
+
+    def _refresh(self) -> None:
+        self._search_job = None
+        self.suggestions = self.search(self.variable.get())
+        self.listbox.delete(0, tk.END)
+        for suggestion in self.suggestions:
+            self.listbox.insert(tk.END, suggestion.label)
+        if self.suggestions:
+            self._show_popup()
+        else:
+            self.hide()
+
+    def _show_popup(self) -> None:
+        self.update_idletasks()
+        width = max(self.entry.winfo_width(), 460)
+        x = self.entry.winfo_rootx()
+        y = self.entry.winfo_rooty() + self.entry.winfo_height()
+        height = min(8, len(self.suggestions)) * 26 + 2
+        self.popup.geometry(f"{width}x{height}+{x}+{y}")
+        self.popup.deiconify()
+        self.popup.lift()
+
+    def _focus_suggestions(self, _event: tk.Event[Any]) -> str:
+        if not self.suggestions:
+            self._refresh()
+        if self.suggestions:
+            self.listbox.selection_clear(0, tk.END)
+            self.listbox.selection_set(0)
+            self.listbox.activate(0)
+            self.listbox.focus_set()
+        return "break"
+
+    def _accept(self, _event: tk.Event[Any] | None = None) -> str:
+        selection = self.listbox.curselection()
+        if selection:
+            suggestion = self.suggestions[int(selection[0])]
+            self.variable.set(suggestion.label)
+            self.on_select(suggestion)
+        self.hide()
+        self.entry.focus_set()
+        return "break"
+
+    def _accept_first(self, _event: tk.Event[Any]) -> str:
+        if not self.suggestions:
+            self._refresh()
+        if self.suggestions:
+            self.listbox.selection_clear(0, tk.END)
+            self.listbox.selection_set(0)
+            return self._accept()
+        return "break"
+
+    def _queue_hide(self, _event: tk.Event[Any]) -> None:
+        self.after(100, self._hide_unfocused)
+
+    def _hide_unfocused(self) -> None:
+        focused = self.focus_get()
+        if focused not in {self.entry, self.listbox}:
+            self.hide()
+
+    def hide(self) -> None:
+        self.popup.withdraw()
+
+
 class UnityScraperDesktop:
     """Main multi-page application window."""
 
@@ -185,7 +306,10 @@ class UnityScraperDesktop:
         self.backups = BackupService()
         self.collections = CollectionIntelligenceService()
         self.database = DatabaseManager()
+        self.title_catalog = XboxUnityTitleCatalog()
         self.current_game: str | None = None
+        self._catalog_syncing = False
+        self._catalog_events: queue.Queue[tuple[str, Any]] = queue.Queue()
 
         ensure_app_dirs()
         ensure_user_titleids_file()
@@ -202,6 +326,7 @@ class UnityScraperDesktop:
 
         if run_first_run_wizard(self.root):
             self.refresh_library()
+            self.root.after(750, self._start_catalog_sync_if_stale)
         else:
             self.root.after(0, self.root.destroy)
 
@@ -585,7 +710,9 @@ class UnityScraperDesktop:
             return
 
         title = details["title"]
-        name = title.get("name") or titleid
+        name = title.get("name")
+        if not name or str(name).strip().upper() == titleid.upper():
+            name = "Unknown game"
         publisher = title.get("publisher") or "Unknown publisher"
         self.detail_title.configure(text=f"{name}  •  {titleid}  •  {publisher}")
 
@@ -639,14 +766,43 @@ class UnityScraperDesktop:
 
         ttk.Label(
             panel,
-            text="Enter one or more 8-character hexadecimal TitleIDs:",
+            text="Search the cached XboxUnity title catalog:",
         ).grid(row=0, column=0, sticky=tk.W)
 
+        self.title_autocomplete = TitleAutocomplete(
+            panel,
+            self.title_catalog.search,
+            self._accept_title_suggestion,
+        )
+        self.title_autocomplete.grid(row=1, column=0, sticky="ew", pady=(6, 12))
+
+        catalog_row = ttk.Frame(panel)
+        catalog_row.grid(row=2, column=0, sticky="ew", pady=(0, 14))
+        catalog_row.columnconfigure(0, weight=1)
+        self.catalog_status_var = tk.StringVar(
+            value=f"{self.title_catalog.count():,} XboxUnity titles cached locally"
+        )
+        ttk.Label(
+            catalog_row,
+            textvariable=self.catalog_status_var,
+            foreground=MUTED,
+        ).grid(row=0, column=0, sticky=tk.W)
+        ttk.Button(
+            catalog_row,
+            text="Refresh Catalog",
+            command=self._start_catalog_sync,
+        ).grid(row=0, column=1, sticky=tk.E)
+
+        ttk.Label(
+            panel,
+            text="Selected TitleIDs:",
+        ).grid(row=3, column=0, sticky=tk.W)
+
         self.add_titleids_text = tk.Text(panel, height=8, wrap=tk.WORD, background="#070b08", foreground=TEXT, insertbackground=ACCENT, selectbackground="#315f12", selectforeground=TEXT, relief=tk.FLAT, highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT)
-        self.add_titleids_text.grid(row=1, column=0, sticky="ew", pady=8)
+        self.add_titleids_text.grid(row=4, column=0, sticky="ew", pady=8)
 
         actions = ttk.Frame(panel)
-        actions.grid(row=2, column=0, sticky="ew")
+        actions.grid(row=5, column=0, sticky="ew")
         ttk.Button(
             actions, text="Import Text File…", command=self._import_titleid_file
         ).pack(side=tk.LEFT)
@@ -661,7 +817,72 @@ class UnityScraperDesktop:
                 "to scan XboxUnity for covers and title updates."
             ),
             wraplength=760,
-        ).grid(row=3, column=0, sticky=tk.W, pady=(18, 0))
+        ).grid(row=6, column=0, sticky=tk.W, pady=(18, 0))
+
+    def _accept_title_suggestion(self, suggestion: TitleSuggestion) -> None:
+        current = self.add_titleids_text.get("1.0", tk.END).strip()
+        separator = "\n" if current else ""
+        self.add_titleids_text.insert(tk.END, f"{separator}{suggestion.titleid}")
+
+    def _start_catalog_sync_if_stale(self) -> None:
+        if self.title_catalog.is_stale():
+            self._start_catalog_sync(silent=True)
+
+    def _start_catalog_sync(self, silent: bool = False) -> None:
+        if self._catalog_syncing:
+            if not silent:
+                self._set_catalog_status("XboxUnity catalog refresh already running")
+            return
+        self._catalog_syncing = True
+        self._set_catalog_status("Starting XboxUnity catalog refresh...")
+
+        def worker() -> None:
+            try:
+                result = self.title_catalog.sync(
+                    progress=lambda page, pages, items: self._catalog_events.put(
+                        ("progress", (page, pages, items))
+                    )
+                )
+                self._catalog_events.put(("completed", result))
+            except Exception as exc:
+                self._catalog_events.put(("failed", str(exc)))
+
+        threading.Thread(
+            target=worker,
+            name="xboxunity-catalog-sync",
+            daemon=True,
+        ).start()
+        self.root.after(100, self._poll_catalog_events)
+
+    def _poll_catalog_events(self) -> None:
+        while True:
+            try:
+                event, value = self._catalog_events.get_nowait()
+            except queue.Empty:
+                break
+            if event == "progress":
+                page, pages, items = value
+                self._set_catalog_status(
+                    f"Caching XboxUnity titles: page {page}/{pages} ({items:,} titles)"
+                )
+            elif event == "completed":
+                self._catalog_syncing = False
+                self._set_catalog_status(
+                    f"{value.items_upserted:,} XboxUnity titles cached locally"
+                )
+                if hasattr(self, "game_tree") and self.game_tree.winfo_exists():
+                    self.refresh_library()
+            elif event == "failed":
+                self._catalog_syncing = False
+                self._set_catalog_status(
+                    f"Catalog refresh failed; using local cache ({value})"
+                )
+        if self._catalog_syncing:
+            self.root.after(150, self._poll_catalog_events)
+
+    def _set_catalog_status(self, text: str) -> None:
+        if hasattr(self, "catalog_status_var"):
+            self.catalog_status_var.set(text)
 
     def _import_titleid_file(self) -> None:
         selected = filedialog.askopenfilename(
