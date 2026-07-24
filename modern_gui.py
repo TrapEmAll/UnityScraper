@@ -40,6 +40,7 @@ from backup_service import BackupService
 from database import DatabaseManager
 from database_migrations import create_database_backup, restore_database_backup
 from diagnostics import create_diagnostics_bundle
+from external_tools_gui import ExternalToolsPage
 from knowledge_service import KnowledgeService
 from knowledge_gui import KnowledgePage
 from library_service import GameSummary, LibraryService
@@ -50,6 +51,15 @@ from updater import VersionChecker
 
 
 APP_VERSION = DISPLAY_VERSION
+PROJECT_CREATOR = "TrapEmAll"
+COMMUNITY_MESSAGE = (
+    "UnityScraper is my way of giving back to the Xbox 360 community that has "
+    "kept this console alive through curiosity, preservation, homebrew, and "
+    "shared knowledge. Thank you to every developer, archivist, modder, tester, "
+    "and player who continues to contribute. I hope this project makes your "
+    "collection easier to care for and helps preserve a piece of gaming history "
+    "for years to come."
+)
 
 BG = "#050806"
 PANEL = "#0a0f0c"
@@ -70,6 +80,15 @@ def _open_path(path: Path) -> None:
         open_path(path)
     except (OSError, RuntimeError) as exc:
         messagebox.showerror("Unable to open", str(exc))
+
+
+def navigation_shortcut(index: int) -> str | None:
+    """Map the first ten navigation entries to Alt+1 through Alt+0."""
+    if 1 <= index <= 9:
+        return str(index)
+    if index == 10:
+        return "0"
+    return None
 
 
 
@@ -436,6 +455,7 @@ class UnityScraperDesktop:
             ("ADD GAMES", self.show_add_games),
             ("DOWNLOADS", self.show_downloads),
             ("BACKUP MANAGER", self.show_backups),
+            ("EXTERNAL TOOLS", self.show_external_tools),
             ("COLLECTIONS", self.show_collections),
             ("KNOWLEDGE", self.show_knowledge),
             ("ARCHIVE HEALTH", self.show_health),
@@ -444,7 +464,7 @@ class UnityScraperDesktop:
         )
         for label, callback in pages:
             ttk.Button(nav, text=label, command=callback, style="Nav.TButton", width=22).pack(
-                fill=tk.X, pady=5
+                fill=tk.X, pady=3
             )
 
         ttk.Label(nav, text="CONNECTED", style="AccentBrand.TLabel").pack(
@@ -459,7 +479,12 @@ class UnityScraperDesktop:
         self.shell.bind("<Configure>", self._resize_shell)
         self.root.after_idle(lambda: self._resize_shell(None))
         for index, (_, callback) in enumerate(pages, start=1):
-            self.root.bind(f"<Alt-Key-{index}>", lambda _event, action=callback: action())
+            shortcut = navigation_shortcut(index)
+            if shortcut:
+                self.root.bind(
+                    f"<Alt-Key-{shortcut}>",
+                    lambda _event, action=callback: action(),
+                )
         self.root.bind("<Control-l>", lambda _event: self.show_library())
         self.show_library()
 
@@ -496,6 +521,15 @@ class UnityScraperDesktop:
             self.content,
             self.backups,
             self._page_header,
+        )
+
+    def show_external_tools(self) -> None:
+        self._clear_content()
+        self.external_tools_page = ExternalToolsPage(
+            self.root,
+            self.content,
+            self._page_header,
+            CONFIG_PATH,
         )
 
     def show_collections(self) -> None:
@@ -1169,6 +1203,11 @@ class UnityScraperDesktop:
         ).pack(anchor=tk.W)
         ttk.Label(
             panel,
+            text=f"Created and maintained by {PROJECT_CREATOR}",
+            style="CardTitle.TLabel",
+        ).pack(anchor=tk.W, pady=(6, 0))
+        ttk.Label(
+            panel,
             text=(
                 "Xbox 360 library, knowledge, update, artwork, and "
                 "backup manager.\n"
@@ -1177,6 +1216,26 @@ class UnityScraperDesktop:
             ),
             justify=tk.LEFT,
         ).pack(anchor=tk.W, pady=(8, 18))
+
+        ttk.Separator(panel).pack(fill=tk.X, pady=(0, 14))
+        ttk.Label(
+            panel,
+            text=f"A message from {PROJECT_CREATOR}",
+            style="CardTitle.TLabel",
+        ).pack(anchor=tk.W)
+        message_panel = ttk.Frame(panel)
+        message_panel.pack(fill=tk.X, pady=(0, 14))
+        ttk.Label(
+            message_panel,
+            text=COMMUNITY_MESSAGE,
+            wraplength=780,
+            justify=tk.LEFT,
+        ).pack(anchor=tk.W)
+        ttk.Label(
+            message_panel,
+            text=f"- {PROJECT_CREATOR}",
+            foreground=ACCENT,
+        ).pack(anchor=tk.W, pady=(10, 0))
 
         ttk.Button(
             panel,
@@ -1202,6 +1261,13 @@ class UnityScraperDesktop:
             text="Open Documentation",
             command=lambda: webbrowser.open(
                 "https://github.com/TrapEmAll/UnityScraper#readme"
+            ),
+        ).pack(anchor=tk.W, pady=4)
+        ttk.Button(
+            panel,
+            text=f"View {PROJECT_CREATOR} on GitHub",
+            command=lambda: webbrowser.open(
+                f"https://github.com/{PROJECT_CREATOR}"
             ),
         ).pack(anchor=tk.W, pady=4)
         ttk.Button(

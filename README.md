@@ -55,6 +55,19 @@ service exposes. UnityScraper does not silently substitute HTTPS URLs.
 - Captures read-only console inventories and compares PC and console content.
 - Runs a user-selected external ISO converter without bundling converter code.
 
+### External Tools
+
+- Runs user-supplied Xbox command-line utilities inside the desktop interface.
+- Includes a XeXTool workspace for basic or extended XEX information.
+- Supports custom executables and argument templates for other community tools.
+- Shows the exact command, captures standard output and errors, and supports
+  cancellation and timeouts.
+- Executes argument vectors directly without using a command shell.
+
+Third-party binaries such as XeXTool are not bundled. Select an executable you
+obtained lawfully and trust. See [EXTERNAL_TOOLS.md](EXTERNAL_TOOLS.md) for
+setup, placeholders, platform notes, and safety guidance.
+
 ### Collection Intelligence and Preservation
 
 - Discovers mounted console, USB, and archive storage.
@@ -132,6 +145,7 @@ Linux source setup:
 | Add Games | Search cached game names, select TitleIDs, or import lists |
 | Downloads | Review and manage download activity |
 | Backup Manager | Scan, install, verify, export, convert, and transfer owned content |
+| External Tools | Run XeXTool and other user-supplied command-line utilities |
 | Collections | Identify storage, compare Title Updates, verify preservation data, and preview repairs |
 | Knowledge | Search sources, facts, citations, imports, and conflicts |
 | Archive Health | Find missing or inconsistent downloaded files |

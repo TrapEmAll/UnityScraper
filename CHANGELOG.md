@@ -7,6 +7,9 @@ Notable changes to UnityScraper are documented here. The project follows
 
 ### Added
 
+- External Tools workspace with XeXTool inspection presets, custom CLI
+  arguments, command previews, captured output, cancellation, and timeouts.
+- Project creator attribution and a community message from TrapEmAll in About.
 - Offline XboxUnity title catalog with background refresh, sync history,
   TitleID/name autocomplete, and a manual/CLI refresh path.
 - Additive schema migration 5 for cached XboxUnity titles and catalog sync
