@@ -42,6 +42,7 @@ from database_migrations import create_database_backup, restore_database_backup
 from diagnostics import create_diagnostics_bundle
 from external_tools_gui import ExternalToolsPage
 from knowledge_service import KnowledgeService
+from knowledge_scheduler import KnowledgeScheduler
 from knowledge_gui import KnowledgePage
 from library_service import GameSummary, LibraryService
 from platform_support import desktop_font_family, open_path
@@ -326,6 +327,7 @@ class UnityScraperDesktop:
         self.root = root
         self.library = LibraryService()
         self.knowledge = KnowledgeService()
+        self.knowledge_scheduler = KnowledgeScheduler()
         self.backups = BackupService()
         self.profiles = ProfileSaveManager()
         self.collections = CollectionIntelligenceService()
@@ -351,6 +353,7 @@ class UnityScraperDesktop:
         if run_first_run_wizard(self.root):
             self.refresh_library()
             self.root.after(750, self._start_catalog_sync_if_stale)
+            self.root.after(1500, self._start_scheduled_knowledge_refresh)
         else:
             self.root.after(0, self.root.destroy)
 
@@ -933,6 +936,23 @@ class UnityScraperDesktop:
     def _set_catalog_status(self, text: str) -> None:
         if hasattr(self, "catalog_status_var"):
             self.catalog_status_var.set(text)
+
+    def _start_scheduled_knowledge_refresh(self) -> None:
+        if not self.knowledge_scheduler.is_due():
+            return
+
+        def worker() -> None:
+            try:
+                self.knowledge_scheduler.run_if_due()
+            except Exception:
+                # The scheduler records the source error for the Knowledge page.
+                return
+
+        threading.Thread(
+            target=worker,
+            name="scheduled-knowledge-refresh",
+            daemon=True,
+        ).start()
 
     def _import_titleid_file(self) -> None:
         selected = filedialog.askopenfilename(

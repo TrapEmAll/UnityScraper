@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -144,12 +145,15 @@ class KnowledgeService:
                 SELECT
                     f.id, f.property, f.value, f.confidence,
                     s.name source_name, s.homepage_url,
-                    c.source_url, c.source_title
+                    c.source_url, c.source_title,
+                    COALESCE(p.priority, 100) source_priority
                 FROM knowledge_facts f
                 JOIN knowledge_sources s ON s.id = f.source_id
                 LEFT JOIN fact_citations c ON c.fact_id = f.id
+                LEFT JOIN knowledge_source_priorities p
+                    ON p.source_id=f.source_id AND p.property=f.property
                 WHERE f.entity_id = ?
-                ORDER BY f.property, f.confidence DESC, s.name
+                ORDER BY f.property, source_priority, f.confidence DESC, s.name
                 """,
                 (entity_id,),
             ).fetchall()
@@ -202,6 +206,7 @@ class KnowledgeService:
                 SELECT
                     c.id, c.property, c.existing_value, c.incoming_value,
                     c.detected_at, c.status, e.canonical_name,
+                    c.existing_source_id, c.incoming_source_id,
                     old.name existing_source, new.name incoming_source
                 FROM knowledge_conflicts c
                 JOIN knowledge_entities e ON e.id = c.entity_id
@@ -213,3 +218,102 @@ class KnowledgeService:
                 (status, status),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def list_priorities(self, property_name: str = "") -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT s.id source_id, s.name source_name, p.property,
+                       COALESCE(p.priority, 100) priority
+                FROM knowledge_sources s
+                LEFT JOIN knowledge_source_priorities p ON p.source_id=s.id
+                WHERE (?='' OR p.property=?)
+                ORDER BY COALESCE(p.property, ''), priority, s.name
+                """,
+                (property_name, property_name),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def set_source_priority(
+        self, source_id: int, property_name: str, priority: int
+    ) -> None:
+        property_name = property_name.strip().casefold().replace(" ", "_")
+        if not property_name:
+            raise ValueError("A fact property is required")
+        if not 1 <= priority <= 1000:
+            raise ValueError("Priority must be between 1 and 1000")
+        with self._connect() as connection:
+            source = connection.execute(
+                "SELECT id FROM knowledge_sources WHERE id=?", (source_id,)
+            ).fetchone()
+            if source is None:
+                raise KeyError(source_id)
+            connection.execute(
+                """
+                INSERT INTO knowledge_source_priorities(
+                    property, source_id, priority, updated_at
+                ) VALUES (?, ?, ?, ?)
+                ON CONFLICT(property, source_id) DO UPDATE SET
+                    priority=excluded.priority, updated_at=excluded.updated_at
+                """,
+                (
+                    property_name,
+                    source_id,
+                    priority,
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+            connection.commit()
+
+    def resolve_conflict(
+        self,
+        conflict_id: int,
+        resolution: str,
+        *,
+        notes: str = "",
+    ) -> dict[str, Any]:
+        allowed = {"prefer_existing", "prefer_incoming", "dismiss"}
+        if resolution not in allowed:
+            raise ValueError(f"Resolution must be one of: {', '.join(sorted(allowed))}")
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM knowledge_conflicts WHERE id=?", (conflict_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(conflict_id)
+            preferred_value = None
+            preferred_source_id = None
+            if resolution == "prefer_existing":
+                preferred_value = row["existing_value"]
+                preferred_source_id = row["existing_source_id"]
+            elif resolution == "prefer_incoming":
+                preferred_value = row["incoming_value"]
+                preferred_source_id = row["incoming_source_id"]
+            resolved_at = datetime.now(timezone.utc).isoformat()
+            connection.execute(
+                """
+                INSERT INTO knowledge_conflict_resolutions(
+                    conflict_id, resolution, preferred_value,
+                    preferred_source_id, notes, resolved_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    conflict_id,
+                    resolution,
+                    preferred_value,
+                    preferred_source_id,
+                    notes.strip(),
+                    resolved_at,
+                ),
+            )
+            connection.execute(
+                "UPDATE knowledge_conflicts SET status=? WHERE id=?",
+                ("dismissed" if resolution == "dismiss" else "resolved", conflict_id),
+            )
+            connection.commit()
+        return {
+            "conflict_id": conflict_id,
+            "resolution": resolution,
+            "preferred_value": preferred_value,
+            "resolved_at": resolved_at,
+        }

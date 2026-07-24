@@ -111,7 +111,11 @@ The **Knowledge** page includes:
 - source license, document count, fact count, and latest import status;
 - ConsoleMods ID sync and whole-wiki sync;
 - Redump and No-Intro file import;
-- conflicting-claim review.
+- per-property source priorities, where lower numbers are preferred for
+  display;
+- conflicting-claim review with recorded prefer-existing, prefer-incoming,
+  and dismiss decisions;
+- an opt-in app-start refresh schedule with a minimum six-hour interval.
 
 ## Remaining Boundaries
 

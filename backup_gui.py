@@ -184,6 +184,12 @@ class BackupPage:
         ttk.Spinbox(
             limit_row, from_=0, to=102400, textvariable=self.ftp_limit_var, width=10
         ).pack(side=tk.LEFT, padx=(8, 0))
+        self.ftp_remote_hash_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            limit_row,
+            text="Require remote SHA-256 when supported",
+            variable=self.ftp_remote_hash_var,
+        ).pack(side=tk.LEFT, padx=(18, 0))
         self.queue_var = tk.StringVar(value="Persistent queue: empty")
         ttk.Label(tab, textvariable=self.queue_var, style="Subheader.TLabel").grid(
             row=9, column=0, columnspan=2, sticky=tk.W, pady=(8, 0)
@@ -458,6 +464,7 @@ class BackupPage:
                 source,
                 remote,
                 bandwidth_limit=max(0, int(self.ftp_limit_var.get() or "0")) * 1024,
+                verify_remote_hash=self.ftp_remote_hash_var.get(),
             )
         except Exception as exc:
             self._failed(exc)

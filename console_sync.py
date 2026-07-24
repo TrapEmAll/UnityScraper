@@ -6,6 +6,7 @@ import ftplib
 import hashlib
 import json
 import posixpath
+import re
 import sqlite3
 import threading
 import time
@@ -88,6 +89,7 @@ class ConsoleSyncService:
         priority: int = 100,
         bandwidth_limit: int = 0,
         expected_sha256: str = "",
+        verify_remote_hash: bool = False,
     ) -> int:
         if direction not in {"upload", "download"}:
             raise ValueError("direction must be upload or download")
@@ -100,8 +102,8 @@ class ConsoleSyncService:
                 INSERT INTO console_transfer_jobs
                     (target_id, direction, local_path, remote_path, total_bytes,
                      status, priority, bandwidth_limit, expected_sha256,
-                     created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)
+                    verify_remote_hash, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     target_id,
@@ -112,6 +114,7 @@ class ConsoleSyncService:
                     priority,
                     max(0, bandwidth_limit),
                     expected_sha256.lower(),
+                    int(verify_remote_hash),
                     now,
                     now,
                 ),
@@ -314,7 +317,13 @@ class ConsoleSyncService:
     def _verify(self, job: dict, target: FtpTarget, total: int) -> None:
         if job["direction"] == "upload":
             with _ftp(target) as ftp:
-                actual = _remote_size(ftp, _remote_path(job["remote_path"]))
+                remote_path = _remote_path(job["remote_path"])
+                actual = _remote_size(ftp, remote_path)
+                if bool(job.get("verify_remote_hash")):
+                    remote_digest = _remote_sha256(ftp, remote_path)
+                    local_digest = _sha256(Path(job["local_path"]))
+                    if remote_digest != local_digest:
+                        raise IOError("Remote SHA-256 verification failed")
             if actual != total:
                 raise IOError(f"Remote verification failed: {actual} != {total}")
         else:
@@ -499,3 +508,24 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _remote_sha256(ftp: ftplib.FTP, path: str) -> str:
+    """Use read-only FTP hash extensions when a dashboard exposes one."""
+    attempts = (
+        f"XSHA256 {path}",
+        "OPTS HASH SHA-256",
+        f"HASH {path}",
+        f"SITE SHA256 {path}",
+    )
+    for command in attempts:
+        try:
+            response = ftp.sendcmd(command)
+        except ftplib.all_errors:
+            continue
+        match = re.search(r"(?i)\b[0-9a-f]{64}\b", response)
+        if match:
+            return match.group(0).lower()
+    raise IOError(
+        "The console FTP server does not expose a supported SHA-256 command"
+    )

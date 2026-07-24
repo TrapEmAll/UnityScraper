@@ -95,6 +95,17 @@ incorrectly. Future editing and migration support should only ship with
 complete package verification, automatic pre-change snapshots, and
 well-tested cross-platform signing support.
 
+## Profile Intelligence and Xenia
+
+The workspace also imports standalone or already-extracted XDBF/GPD files for
+read-only achievement views, compares two indexed profiles, and previews Xenia
+save mappings. Xenia migration always creates a verified save snapshot first,
+copies through `.partial` staging, verifies SHA-256, skips identical files, and
+never overwrites a different destination.
+
+See [PROFILE_INTELLIGENCE.md](PROFILE_INTELLIGENCE.md) for the parser bounds,
+comparison fields, Xenia paths, and migration safety model.
+
 ## Le Fluffie Attribution
 
 The profile/STFS field model is informed by Dalavin, also known as

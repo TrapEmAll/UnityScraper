@@ -7,6 +7,18 @@ Notable changes to UnityScraper are documented here. The project follows
 
 ### Added
 
+- Read-only XDBF/GPD inspection with bounded entry parsing, achievement state,
+  gamerscore summaries, extracted-folder discovery, and local inventory.
+- Profile comparison for save hashes and imported achievement state.
+- Snapshot-first Xenia migration previews with atomic verified copies and
+  non-overwriting conflict handling.
+- Additive schema migration 7 for GPDs, achievements, comparisons, Xenia
+  migration runs, source priorities, conflict decisions, sync schedules, and
+  opt-in remote hash verification.
+- Field-specific knowledge source priorities, auditable conflict resolution,
+  and opt-in app-start knowledge refresh scheduling.
+- Feature-detected remote SHA-256 verification for compatible console FTP
+  dashboards.
 - Profiles & Saves workspace with read-only Content-tree discovery, masked
   profile inventory, STFS ownership metadata, save search, duplicate and
   mismatch reporting, verified snapshots, manifests, and conflict-safe restore.

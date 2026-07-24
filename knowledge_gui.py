@@ -9,6 +9,7 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Any
 
 from knowledge_service import KnowledgeService
+from knowledge_scheduler import KnowledgeScheduler
 
 TEXT = "#f2f5f2"
 ACCENT = "#72e000"
@@ -27,6 +28,7 @@ class KnowledgePage:
         self.root = root
         self.parent = parent
         self.service = service
+        self.scheduler = KnowledgeScheduler(service.database_path)
         self.status_var = tk.StringVar(value="Ready")
         self.search_var = tk.StringVar()
         self._build()
@@ -65,12 +67,15 @@ class KnowledgePage:
         browse = ttk.Frame(notebook, padding=10)
         sources = ttk.Frame(notebook, padding=10)
         conflicts = ttk.Frame(notebook, padding=10)
+        priorities = ttk.Frame(notebook, padding=10)
         notebook.add(browse, text="Browse")
         notebook.add(sources, text="Sources & Imports")
         notebook.add(conflicts, text="Conflicts")
+        notebook.add(priorities, text="Priorities & Schedule")
         self._build_browse(browse)
         self._build_sources(sources)
         self._build_conflicts(conflicts)
+        self._build_priorities(priorities)
         self.refresh()
 
     def _build_browse(self, parent: ttk.Frame) -> None:
@@ -203,6 +208,105 @@ class KnowledgePage:
             self.conflict_tree.heading(column, text=label)
             self.conflict_tree.column(column, width=width, minwidth=60)
         self.conflict_tree.grid(row=0, column=0, sticky="nsew")
+        actions = ttk.Frame(parent)
+        actions.grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        ttk.Button(
+            actions,
+            text="Prefer Existing",
+            command=lambda: self._resolve_selected_conflict("prefer_existing"),
+        ).pack(side=tk.LEFT)
+        ttk.Button(
+            actions,
+            text="Prefer Incoming",
+            command=lambda: self._resolve_selected_conflict("prefer_incoming"),
+        ).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(
+            actions,
+            text="Dismiss",
+            command=lambda: self._resolve_selected_conflict("dismiss"),
+        ).pack(side=tk.LEFT, padx=(8, 0))
+
+    def _build_priorities(self, parent: ttk.Frame) -> None:
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(2, weight=1)
+        priority_controls = ttk.LabelFrame(
+            parent, text="Field-specific source priority", padding=10
+        )
+        priority_controls.grid(row=0, column=0, sticky="ew")
+        priority_controls.columnconfigure(1, weight=1)
+        self.priority_property_var = tk.StringVar(value="publisher")
+        self.priority_source_var = tk.StringVar()
+        self.priority_value_var = tk.IntVar(value=100)
+        ttk.Label(priority_controls, text="Fact property").grid(
+            row=0, column=0, sticky=tk.W
+        )
+        ttk.Entry(
+            priority_controls, textvariable=self.priority_property_var
+        ).grid(row=0, column=1, sticky="ew", padx=8)
+        ttk.Label(priority_controls, text="Source").grid(
+            row=1, column=0, sticky=tk.W, pady=(8, 0)
+        )
+        self.priority_source_combo = ttk.Combobox(
+            priority_controls,
+            textvariable=self.priority_source_var,
+            state="readonly",
+        )
+        self.priority_source_combo.grid(
+            row=1, column=1, sticky="ew", padx=8, pady=(8, 0)
+        )
+        ttk.Label(priority_controls, text="Priority").grid(
+            row=2, column=0, sticky=tk.W, pady=(8, 0)
+        )
+        ttk.Spinbox(
+            priority_controls,
+            from_=1,
+            to=1000,
+            textvariable=self.priority_value_var,
+            width=8,
+        ).grid(row=2, column=1, sticky=tk.W, padx=8, pady=(8, 0))
+        ttk.Button(
+            priority_controls,
+            text="Save Priority",
+            command=self._save_priority,
+            style="Accent.TButton",
+        ).grid(row=2, column=2, pady=(8, 0))
+
+        schedule = ttk.LabelFrame(parent, text="Automatic refresh", padding=10)
+        schedule.grid(row=1, column=0, sticky="ew", pady=10)
+        self.schedule_enabled_var = tk.BooleanVar()
+        self.schedule_hours_var = tk.IntVar(value=168)
+        ttk.Checkbutton(
+            schedule,
+            text="Refresh knowledge when the application starts and the interval is due",
+            variable=self.schedule_enabled_var,
+        ).pack(side=tk.LEFT)
+        ttk.Label(schedule, text="Hours").pack(side=tk.LEFT, padx=(18, 6))
+        ttk.Spinbox(
+            schedule,
+            from_=6,
+            to=8760,
+            textvariable=self.schedule_hours_var,
+            width=7,
+        ).pack(side=tk.LEFT)
+        ttk.Button(
+            schedule,
+            text="Save Schedule",
+            command=self._save_schedule,
+        ).pack(side=tk.LEFT, padx=(8, 0))
+
+        self.priority_tree = ttk.Treeview(
+            parent,
+            columns=("property", "source", "priority"),
+            show="headings",
+        )
+        for column, label, width in (
+            ("property", "Property", 180),
+            ("source", "Source", 260),
+            ("priority", "Priority", 90),
+        ):
+            self.priority_tree.heading(column, text=label)
+            self.priority_tree.column(column, width=width, anchor=tk.W)
+        self.priority_tree.grid(row=2, column=0, sticky="nsew")
 
     def refresh(self) -> None:
         counts = self.service.counts()
@@ -211,6 +315,7 @@ class KnowledgePage:
         self.refresh_results()
         self.refresh_sources()
         self.refresh_conflicts()
+        self.refresh_priorities()
 
     def refresh_results(self) -> None:
         self._clear_tree(self.result_tree)
@@ -253,6 +358,7 @@ class KnowledgePage:
             self.conflict_tree.insert(
                 "",
                 tk.END,
+                iid=str(row["id"]),
                 text=row["canonical_name"],
                 values=(
                     row["property"],
@@ -261,6 +367,75 @@ class KnowledgePage:
                     sources,
                 ),
             )
+
+    def refresh_priorities(self) -> None:
+        sources = self.service.list_sources()
+        self.priority_sources = {
+            str(row["name"]): int(row["id"]) for row in sources
+        }
+        names = list(self.priority_sources)
+        self.priority_source_combo.configure(values=names)
+        if names and self.priority_source_var.get() not in self.priority_sources:
+            self.priority_source_var.set(names[0])
+        self.priority_tree.delete(*self.priority_tree.get_children())
+        for row in self.service.list_priorities():
+            if not row.get("property"):
+                continue
+            self.priority_tree.insert(
+                "",
+                tk.END,
+                values=(
+                    row["property"],
+                    row["source_name"],
+                    row["priority"],
+                ),
+            )
+        state = self.scheduler.status()
+        self.schedule_enabled_var.set(bool(state.get("enabled")))
+        self.schedule_hours_var.set(int(state.get("interval_hours") or 168))
+
+    def _save_priority(self) -> None:
+        source_id = self.priority_sources.get(self.priority_source_var.get())
+        if source_id is None:
+            return
+        try:
+            self.service.set_source_priority(
+                source_id,
+                self.priority_property_var.get(),
+                int(self.priority_value_var.get()),
+            )
+        except Exception as exc:
+            messagebox.showerror("Priority not saved", str(exc), parent=self.root)
+            return
+        self.status_var.set("Source priority saved")
+        self.refresh_priorities()
+
+    def _save_schedule(self) -> None:
+        try:
+            self.scheduler.configure(
+                self.schedule_enabled_var.get(),
+                int(self.schedule_hours_var.get()),
+            )
+        except Exception as exc:
+            messagebox.showerror("Schedule not saved", str(exc), parent=self.root)
+            return
+        self.status_var.set("Knowledge refresh schedule saved")
+        self.refresh_priorities()
+
+    def _resolve_selected_conflict(self, resolution: str) -> None:
+        selection = self.conflict_tree.selection()
+        if not selection:
+            messagebox.showinfo(
+                "Resolve conflict", "Select a conflict first.", parent=self.root
+            )
+            return
+        try:
+            self.service.resolve_conflict(int(selection[0]), resolution)
+        except Exception as exc:
+            messagebox.showerror("Conflict not resolved", str(exc), parent=self.root)
+            return
+        self.status_var.set("Conflict decision recorded")
+        self.refresh()
 
     def _show_details(self, _event: tk.Event[Any] | None = None) -> None:
         selection = self.result_tree.selection()
