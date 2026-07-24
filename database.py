@@ -170,6 +170,7 @@ class DatabaseManager:
                 # Update search index
                 self._update_search_index(conn, titleid, name, publisher, metadata)
                 self._enrich_unknown_titleid_metadata(conn, titleid)
+                self._enrich_unknown_titleid_from_catalog(conn, titleid)
                 
                 logger.info(f"Added/updated TitleID: {titleid}")
                 return True
@@ -242,6 +243,43 @@ class DatabaseManager:
             (new_name, new_publisher, json.dumps(metadata, sort_keys=True), titleid),
         )
         self._update_search_index(conn, titleid, new_name, new_publisher, metadata)
+        return 1
+
+    def _enrich_unknown_titleid_from_catalog(self, conn, titleid: str) -> int:
+        """Use the cached XboxUnity title only when the library name is unknown."""
+        row = conn.execute(
+            """
+            SELECT t.name, t.publisher, t.metadata, c.name AS catalog_name
+            FROM titleids AS t
+            LEFT JOIN xboxunity_title_catalog AS c ON c.titleid = t.titleid
+            WHERE t.titleid = ?
+            """,
+            (titleid,),
+        ).fetchone()
+        if not row or not row["catalog_name"]:
+            return 0
+        current_name = row["name"]
+        if not (is_unknown(current_name) or str(current_name).upper() == titleid.upper()):
+            return 0
+
+        metadata = {}
+        if row["metadata"]:
+            try:
+                metadata = json.loads(row["metadata"])
+            except json.JSONDecodeError:
+                metadata = {}
+        metadata["title_source"] = "XboxUnity title catalog"
+        conn.execute(
+            "UPDATE titleids SET name = ?, metadata = ? WHERE titleid = ?",
+            (row["catalog_name"], json.dumps(metadata, sort_keys=True), titleid),
+        )
+        self._update_search_index(
+            conn,
+            titleid,
+            row["catalog_name"],
+            row["publisher"],
+            metadata,
+        )
         return 1
     
     def _update_search_index(self, conn, titleid: str, name: Optional[str] = None, 

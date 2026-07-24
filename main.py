@@ -792,6 +792,11 @@ def main():
         )
     )
     parser.add_argument(
+        '--sync-title-catalog',
+        action='store_true',
+        help='Refresh the local XboxUnity title-name catalog for offline autocomplete'
+    )
+    parser.add_argument(
         '--sync-knowledge',
         action='store_true',
         help='Import ConsoleMods knowledge data and enrich unknown library metadata'
@@ -948,6 +953,28 @@ def main():
         logger.info("Configuration saved")
     
     # Initialize scraper
+    if args.sync_title_catalog:
+        try:
+            from title_catalog import XboxUnityTitleCatalog
+
+            DatabaseManager()
+            summary = XboxUnityTitleCatalog(
+                request_interval=config.rate_limit,
+                timeout=config.timeout,
+            ).sync(
+                progress=lambda page, pages, items: logger.info(
+                    "XboxUnity catalog page %s/%s (%s titles)",
+                    page,
+                    pages,
+                    items,
+                )
+            )
+            logger.info("XboxUnity title catalog sync completed: %s", summary)
+            sys.exit(0)
+        except Exception as e:
+            logger.error("XboxUnity title catalog sync failed: %s", e)
+            sys.exit(1)
+
     if args.sync_knowledge:
         try:
             from knowledge_sync import sync_consolemods_knowledge
