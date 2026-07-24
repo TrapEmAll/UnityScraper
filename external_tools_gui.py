@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
 import threading
 import tkinter as tk
@@ -10,6 +11,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any, Callable
 
+from app_paths import resource_path
 from external_tools import (
     ExternalToolError,
     ExternalToolRunner,
@@ -24,6 +26,15 @@ XEXTOOL_PRESETS = {
     "Basic information": '"{input}"',
     "Custom arguments": "",
 }
+XEXTOOL_CREDIT = "XeXTool 6.3 by xorloser"
+
+
+def bundled_xextool_path() -> Path | None:
+    """Return the packaged XeXTool executable when it is usable."""
+    if os.name != "nt":
+        return None
+    candidate = resource_path("assets", "tools", "xextool", "xextool.exe")
+    return candidate if candidate.is_file() else None
 
 
 class ExternalToolsPage:
@@ -63,9 +74,10 @@ class ExternalToolsPage:
         tool_config = self.config.get("external_tools", {})
         if not isinstance(tool_config, dict):
             tool_config = {}
+        self.bundled_xextool = bundled_xextool_path()
         self.tool_type_var = tk.StringVar(value="XeXTool")
         self.executable_var = tk.StringVar(
-            value=str(tool_config.get("xextool_path", ""))
+            value=self._saved_or_bundled_path(tool_config)
         )
         self.operation_var = tk.StringVar(value="Extended information")
         self.arguments_var = tk.StringVar(
@@ -85,6 +97,12 @@ class ExternalToolsPage:
         )
         tool_type.grid(row=0, column=1, sticky=tk.W, padx=(10, 0), pady=4)
         tool_type.bind("<<ComboboxSelected>>", self._tool_type_changed)
+
+        ttk.Label(
+            setup,
+            text=XEXTOOL_CREDIT,
+            style="Subheader.TLabel",
+        ).grid(row=0, column=2, sticky=tk.E, pady=4)
 
         self._path_row(
             setup,
@@ -167,7 +185,11 @@ class ExternalToolsPage:
         self.output_text.configure(yscrollcommand=scrollbar.set)
 
         self.status_var = tk.StringVar(
-            value="Choose a trusted executable and an input file."
+            value=(
+                "Bundled XeXTool is ready. Choose an XEX file."
+                if self.bundled_xextool is not None
+                else "Choose a trusted executable and an input file."
+            )
         )
         ttk.Label(body, textvariable=self.status_var, style="Subheader.TLabel").grid(
             row=2, column=0, sticky="ew", pady=(8, 0)
@@ -195,7 +217,11 @@ class ExternalToolsPage:
         if not isinstance(tool_config, dict):
             tool_config = {}
         path_key = "custom_tool_path" if custom else "xextool_path"
-        self.executable_var.set(str(tool_config.get(path_key, "")))
+        if custom:
+            path = str(tool_config.get(path_key, ""))
+        else:
+            path = self._saved_or_bundled_path(tool_config)
+        self.executable_var.set(path)
         self.operation_var.set("Custom arguments" if custom else "Extended information")
         self.arguments_var.set("" if custom else XEXTOOL_PRESETS["Extended information"])
         self.operation_box.configure(state=tk.DISABLED if custom else "readonly")
@@ -323,6 +349,12 @@ class ExternalToolsPage:
         except (OSError, json.JSONDecodeError):
             return {}
 
+    def _saved_or_bundled_path(self, tool_config: dict[str, Any]) -> str:
+        saved = Path(str(tool_config.get("xextool_path", ""))).expanduser()
+        if saved.is_file():
+            return str(saved)
+        return str(self.bundled_xextool or "")
+
     def _save_tool_path(self) -> None:
         if not self.executable_var.get().strip():
             return
@@ -336,6 +368,13 @@ class ExternalToolsPage:
             if self.tool_type_var.get() == "Custom CLI tool"
             else "xextool_path"
         )
-        tools[path_key] = self.executable_var.get()
+        if (
+            path_key == "xextool_path"
+            and self.bundled_xextool is not None
+            and Path(self.executable_var.get()) == self.bundled_xextool
+        ):
+            tools.pop(path_key, None)
+        else:
+            tools[path_key] = self.executable_var.get()
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
         self.config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")

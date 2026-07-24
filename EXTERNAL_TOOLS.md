@@ -5,10 +5,15 @@ interface. Open **External Tools** from the sidebar.
 
 ## XeXTool
 
-XeXTool is not distributed with UnityScraper. Its redistribution terms are not
-clear enough for this project to package the executable. Obtain it lawfully,
-review it with your usual security tools, and select your local copy using
-**Browse**.
+The Windows build includes XeXTool 6.3, created by **xorloser**, so the XeXTool
+preset works without separate setup. The executable was sourced from the
+GPL-3.0-licensed
+[XboxChef/XexToolGUI](https://github.com/XboxChef/XexToolGUI) project.
+UnityScraper preserves its source license and records the exact binary checksum
+in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+Use **Browse** to select a different lawfully obtained build at any time. A
+missing or invalid saved path automatically falls back to the bundled copy.
 
 The XeXTool preset provides:
 
@@ -33,8 +38,9 @@ Each placeholder becomes part of one argument after parsing. UnityScraper
 starts the executable directly with `shell=False`; it does not send the command
 through PowerShell, Command Prompt, Bash, or another command shell.
 
-The configured XeXTool path is stored in the normal application configuration.
-Tool binaries are never copied into UnityScraper's data folder.
+Custom XeXTool and CLI paths are stored in the normal application
+configuration. The bundled executable remains inside UnityScraper's packaged
+resources and is not copied into the user data folder.
 
 ## Safety
 
@@ -49,6 +55,7 @@ Tool binaries are never copied into UnityScraper's data folder.
 ## Platform Notes
 
 The external tool must be executable on the current operating system.
-Windows `.exe` files do not run natively on Linux. UnityScraper does not
-automatically install or invoke Wine. Linux users can select native tools or a
-trusted wrapper executable they configured themselves.
+The bundled XeXTool executable is enabled on Windows. Windows `.exe` files do
+not run natively on Linux, so Linux users can select a native tool or a trusted
+wrapper they configured themselves. UnityScraper does not automatically
+install or invoke Wine.
