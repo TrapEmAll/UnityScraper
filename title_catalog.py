@@ -172,6 +172,18 @@ class XboxUnityTitleCatalog:
         """Refresh every title page, preserving the last usable cache on failure."""
         started_at = _now()
         with self._connection() as connection:
+            connection.execute(
+                """
+                UPDATE xboxunity_catalog_sync_runs
+                SET completed_at = ?, status = 'interrupted',
+                    error_message = COALESCE(
+                        error_message,
+                        'Application exited before catalog refresh completed'
+                    )
+                WHERE status = 'running'
+                """,
+                (started_at,),
+            )
             cursor = connection.execute(
                 """
                 INSERT INTO xboxunity_catalog_sync_runs(started_at, status)
@@ -186,6 +198,7 @@ class XboxUnityTitleCatalog:
         pages_expected = 0
         pages_fetched = 0
         items_upserted = 0
+        library_names_enriched = 0
         try:
             page = 0
             while page == 0 or page < pages_expected:
@@ -196,6 +209,16 @@ class XboxUnityTitleCatalog:
                     raise ValueError("XboxUnity title list returned invalid Items data")
                 items_upserted += self._store_page(items, source_url)
                 pages_fetched += 1
+                library_names_enriched += self.enrich_library_names()
+                with self._connection() as connection:
+                    connection.execute(
+                        """
+                        UPDATE xboxunity_catalog_sync_runs
+                        SET pages_expected = ?, pages_fetched = ?, items_upserted = ?
+                        WHERE id = ?
+                        """,
+                        (pages_expected, pages_fetched, items_upserted, run_id),
+                    )
                 if progress:
                     progress(pages_fetched, pages_expected, items_upserted)
                 page += 1
@@ -207,7 +230,7 @@ class XboxUnityTitleCatalog:
                     "DELETE FROM xboxunity_title_catalog WHERE fetched_at < ?",
                     (started_at,),
                 )
-            enriched = self.enrich_library_names()
+            library_names_enriched += self.enrich_library_names()
             with self._connection() as connection:
                 connection.execute(
                     """
@@ -224,7 +247,11 @@ class XboxUnityTitleCatalog:
                         run_id,
                     ),
                 )
-            return CatalogSyncResult(pages_fetched, items_upserted, enriched)
+            return CatalogSyncResult(
+                pages_fetched,
+                items_upserted,
+                library_names_enriched,
+            )
         except Exception as exc:
             with self._connection() as connection:
                 connection.execute(

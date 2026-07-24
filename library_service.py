@@ -56,13 +56,17 @@ class LibraryService:
                 CASE
                     WHEN t.name IS NULL OR TRIM(t.name) = ''
                          OR UPPER(TRIM(t.name)) = UPPER(t.titleid)
-                    THEN 'Unknown game'
+                         OR LOWER(TRIM(t.name)) IN (
+                             'unknown', 'unknown game', 'unknown title',
+                             'n/a', 'none', 'null'
+                         )
+                    THEN COALESCE(NULLIF(TRIM(xc.name), ''), 'Unknown game')
                     ELSE t.name
                 END AS name,
                 COALESCE(t.publisher, '') AS publisher,
                 COALESCE(t.last_scraped, '') AS last_scraped,
-                COUNT(DISTINCT c.id) AS covers_total,
-                COUNT(DISTINCT CASE WHEN c.status = 'downloaded' THEN c.id END)
+                COUNT(DISTINCT cv.id) AS covers_total,
+                COUNT(DISTINCT CASE WHEN cv.status = 'downloaded' THEN cv.id END)
                     AS covers_downloaded,
                 COUNT(DISTINCT u.id) AS updates_total,
                 COUNT(DISTINCT CASE WHEN u.status = 'downloaded' THEN u.id END)
@@ -70,7 +74,8 @@ class LibraryService:
                 COUNT(DISTINCT CASE WHEN u.status = 'failed' THEN u.id END)
                     AS updates_failed
             FROM titleids AS t
-            LEFT JOIN covers AS c ON c.titleid = t.titleid
+            LEFT JOIN xboxunity_title_catalog AS xc ON xc.titleid = t.titleid
+            LEFT JOIN covers AS cv ON cv.titleid = t.titleid
             LEFT JOIN title_updates AS u ON u.titleid = t.titleid
         """
         parameters: list[Any] = []
@@ -79,13 +84,14 @@ class LibraryService:
             query += """
                 WHERE LOWER(t.titleid) LIKE ?
                    OR LOWER(COALESCE(t.name, '')) LIKE ?
+                   OR LOWER(COALESCE(xc.name, '')) LIKE ?
                    OR LOWER(COALESCE(t.publisher, '')) LIKE ?
             """
             value = f"%{search.strip().lower()}%"
-            parameters.extend([value, value, value])
+            parameters.extend([value, value, value, value])
 
         query += """
-            GROUP BY t.titleid, t.name, t.publisher, t.last_scraped
+            GROUP BY t.titleid, t.name, t.publisher, t.last_scraped, xc.name
             ORDER BY name COLLATE NOCASE, t.titleid
         """
 
@@ -114,7 +120,12 @@ class LibraryService:
 
         with closing(self._connect()) as connection:
             title = connection.execute(
-                "SELECT * FROM titleids WHERE titleid = ?",
+                """
+                SELECT t.*, xc.name AS catalog_name
+                FROM titleids AS t
+                LEFT JOIN xboxunity_title_catalog AS xc ON xc.titleid = t.titleid
+                WHERE t.titleid = ?
+                """,
                 (titleid,),
             ).fetchone()
 
@@ -147,8 +158,27 @@ class LibraryService:
                 (titleid,),
             ).fetchall()
 
+        title_record = dict(title)
+        current_name = title_record.get("name")
+        unknown_names = {
+            "",
+            "unknown",
+            "unknown game",
+            "unknown title",
+            "n/a",
+            "none",
+            "null",
+        }
+        if (
+            current_name is None
+            or str(current_name).strip().casefold() in unknown_names
+            or str(current_name).strip().upper() == titleid.upper()
+        ):
+            title_record["name"] = title_record.get("catalog_name")
+        title_record.pop("catalog_name", None)
+
         return {
-            "title": dict(title),
+            "title": title_record,
             "covers": [dict(row) for row in covers],
             "updates": [dict(row) for row in updates],
         }

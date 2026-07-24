@@ -146,6 +146,7 @@ class DatabaseManager:
             KnowledgeRepository(conn).ensure_schema()
             ensure_backup_schema(conn)
             ensure_application_schema(conn)
+            self._enrich_existing_titleids_from_catalog_connection(conn)
             
             logger.info(f"Database initialized at {self.db_path}")
     
@@ -192,6 +193,35 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to enrich TitleIDs from knowledge data: {e}")
             return 0
+
+    def enrich_existing_titleids_from_catalog(self) -> int:
+        """Fill unknown names from XboxUnity titles already present in the cache."""
+        try:
+            with self.get_connection() as conn:
+                return self._enrich_existing_titleids_from_catalog_connection(conn)
+        except Exception as e:
+            logger.error(f"Failed to enrich TitleIDs from XboxUnity catalog: {e}")
+            return 0
+
+    def _enrich_existing_titleids_from_catalog_connection(self, conn) -> int:
+        rows = conn.execute(
+            """
+            SELECT t.titleid
+            FROM titleids AS t
+            JOIN xboxunity_title_catalog AS c ON c.titleid = t.titleid
+            WHERE t.name IS NULL
+               OR TRIM(t.name) = ''
+               OR UPPER(TRIM(t.name)) = UPPER(t.titleid)
+               OR LOWER(TRIM(t.name)) IN (
+                   'unknown', 'unknown game', 'unknown title',
+                   'n/a', 'none', 'null'
+               )
+            """
+        ).fetchall()
+        return sum(
+            self._enrich_unknown_titleid_from_catalog(conn, row["titleid"])
+            for row in rows
+        )
 
     def _enrich_unknown_titleid_metadata(self, conn, titleid: str) -> int:
         """Apply preferred knowledge facts only where local values are unknown."""
