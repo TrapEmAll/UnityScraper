@@ -42,6 +42,12 @@ backup-management, and source-attributed knowledge application.
   reporting, verified snapshots, manifests, and conflict-safe restore.
 - Credited GPLv3 technical lineage from Dalavin / DJ SkunkieButt's X360
   library and Le Fluffie without bundling its updater, keys, or executable.
+- Bounded read-only XDBF/GPD achievement inspection, profile comparison, and
+  snapshot-first Xenia migration with non-overwriting verified copies.
+- Per-property knowledge source priorities, recorded conflict decisions, and
+  opt-in scheduled app-start refreshes.
+- Feature-detected, opt-in remote SHA-256 verification for console FTP servers
+  that expose a compatible read-only command.
 - Local-by-default REST API with token-required remote binding, restricted
   browser origins, validated settings, and current version reporting.
 - Cross-platform CI, Windows packaging checks, tagged release archives,
@@ -83,9 +89,9 @@ backup-management, and source-attributed knowledge application.
 
 ## Future Work
 
-- Add field-specific source-priority controls and conflict resolution actions.
-- Add optional scheduled knowledge refreshes.
-- Validate console resume behavior against a broader matrix of dashboard FTP
-  servers and add opt-in remote hash verification where servers expose it.
-- Add read-only GPD/achievement views, Xenia save mapping, and audited
-  profile-migration previews before considering package mutation.
+- Validate console resume and optional hash behavior against a broader matrix
+  of real dashboard FTP servers.
+- Expand read-only GPD coverage with dashboard title-history and safe image
+  previews after adding a decompression and image validation boundary.
+- Consider package mutation only after complete STFS extraction, rehashing,
+  signing, verification, and automatic recovery have independent test vectors.

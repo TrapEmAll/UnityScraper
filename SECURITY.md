@@ -37,6 +37,12 @@ filesystem contents in a report.
 - Profile and save identifiers are masked in the GUI by default.
 - Profile scans are read-only. Snapshot restores preserve different existing
   files and write the restored copy alongside them.
+- GPD parsing validates bounded entry tables and file offsets and never writes
+  achievement, setting, sync, or image records.
+- Xenia migrations require a preview and verified snapshot, publish through
+  partial files, and never overwrite different destination data.
+- Optional remote hashes use read-only FTP commands and fail closed when the
+  selected dashboard does not expose a supported SHA-256 response.
 - Profiles, saves, gamertags, XUIDs, console IDs, and device IDs are not sent
   to metadata sources.
 - External converters run only when explicitly configured by the user.

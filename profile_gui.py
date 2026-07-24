@@ -11,7 +11,9 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Any, Callable
 
 from platform_support import open_path
+from profile_intelligence import ProfileIntelligenceService
 from profile_manager import ProfileSaveManager, mask_identifier
+from xenia_bridge import MigrationPlan, candidate_xenia_content_roots
 
 
 def _size(value: int) -> str:
@@ -37,12 +39,16 @@ class ProfileSavePage:
         self.root = root
         self.parent = parent
         self.manager = manager
+        self.intelligence = ProfileIntelligenceService(manager.db_path, manager)
         self.config_path = config_path
         self.events: queue.Queue[tuple[str, Any]] = queue.Queue()
         self.running = False
         self.profiles: dict[str, dict[str, Any]] = {}
         self.saves: dict[str, dict[str, Any]] = {}
         self.snapshots: dict[str, dict[str, Any]] = {}
+        self.gpd_files: dict[str, dict[str, Any]] = {}
+        self.profile_choices: dict[str, str] = {}
+        self.migration_plan: MigrationPlan | None = None
 
         page_header(
             "Profiles & Saves",
@@ -89,10 +95,19 @@ class ProfileSavePage:
 
         inventory = ttk.Frame(notebook, padding=10)
         snapshots = ttk.Frame(notebook, padding=10)
+        achievements = ttk.Frame(notebook, padding=10)
+        compare = ttk.Frame(notebook, padding=10)
+        xenia = ttk.Frame(notebook, padding=10)
         notebook.add(inventory, text="Inventory")
         notebook.add(snapshots, text="Snapshots")
+        notebook.add(achievements, text="Achievements")
+        notebook.add(compare, text="Compare")
+        notebook.add(xenia, text="Xenia")
         self._build_inventory(inventory)
         self._build_snapshots(snapshots)
+        self._build_achievements(achievements)
+        self._build_compare(compare)
+        self._build_xenia(xenia)
 
         self.status_var = tk.StringVar(value="Choose a Content folder to begin.")
         ttk.Label(body, textvariable=self.status_var, style="Subheader.TLabel").grid(
@@ -254,6 +269,178 @@ class ProfileSavePage:
         ).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(actions, text="Refresh", command=self.refresh).pack(side=tk.RIGHT)
 
+    def _build_achievements(self, parent: ttk.Frame) -> None:
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(1, weight=2)
+        parent.rowconfigure(3, weight=3)
+        controls = ttk.Frame(parent)
+        controls.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        ttk.Button(
+            controls,
+            text="Import GPD",
+            command=self.import_gpd,
+            style="Accent.TButton",
+        ).pack(side=tk.LEFT)
+        ttk.Button(
+            controls,
+            text="Scan Extracted Folder",
+            command=self.scan_gpd_folder,
+        ).pack(side=tk.LEFT, padx=(8, 0))
+        self.achievement_search_var = tk.StringVar()
+        ttk.Label(controls, text="Find").pack(side=tk.LEFT, padx=(20, 6))
+        search = ttk.Entry(
+            controls, textvariable=self.achievement_search_var, width=28
+        )
+        search.pack(side=tk.LEFT)
+        search.bind("<KeyRelease>", lambda _event: self._refresh_achievements())
+
+        self.gpd_tree = ttk.Treeview(
+            parent,
+            columns=("titleid", "earned", "score", "status", "path"),
+            show="headings",
+            selectmode="browse",
+            height=6,
+        )
+        for column, label, width in (
+            ("titleid", "TitleID", 90),
+            ("earned", "Unlocked", 90),
+            ("score", "Gamerscore", 110),
+            ("status", "Status", 85),
+            ("path", "Extracted GPD", 430),
+        ):
+            self.gpd_tree.heading(column, text=label)
+            self.gpd_tree.column(column, width=width, anchor=tk.W)
+        self.gpd_tree.grid(row=1, column=0, sticky="nsew")
+        self.gpd_tree.bind(
+            "<<TreeviewSelect>>", lambda _event: self._refresh_achievements()
+        )
+
+        ttk.Label(
+            parent,
+            text=(
+                "Read-only achievement records from standalone or extracted XDBF/GPD "
+                "files. UnityScraper never edits these databases."
+            ),
+            style="Subheader.TLabel",
+        ).grid(row=2, column=0, sticky="ew", pady=(8, 6))
+        self.achievement_tree = ttk.Treeview(
+            parent,
+            columns=("id", "title", "score", "state", "unlocked"),
+            show="headings",
+        )
+        for column, label, width in (
+            ("id", "ID", 65),
+            ("title", "Achievement", 330),
+            ("score", "G", 55),
+            ("state", "State", 125),
+            ("unlocked", "Unlocked", 180),
+        ):
+            self.achievement_tree.heading(column, text=label)
+            self.achievement_tree.column(column, width=width, anchor=tk.W)
+        self.achievement_tree.grid(row=3, column=0, sticky="nsew")
+
+    def _build_compare(self, parent: ttk.Frame) -> None:
+        parent.columnconfigure(1, weight=1)
+        parent.rowconfigure(3, weight=1)
+        self.compare_left_var = tk.StringVar()
+        self.compare_right_var = tk.StringVar()
+        ttk.Label(parent, text="First profile").grid(row=0, column=0, sticky=tk.W)
+        self.compare_left = ttk.Combobox(
+            parent, textvariable=self.compare_left_var, state="readonly"
+        )
+        self.compare_left.grid(row=0, column=1, sticky="ew", padx=(8, 0))
+        ttk.Label(parent, text="Second profile").grid(
+            row=1, column=0, sticky=tk.W, pady=(8, 0)
+        )
+        self.compare_right = ttk.Combobox(
+            parent, textvariable=self.compare_right_var, state="readonly"
+        )
+        self.compare_right.grid(
+            row=1, column=1, sticky="ew", padx=(8, 0), pady=(8, 0)
+        )
+        ttk.Button(
+            parent,
+            text="Compare Profiles",
+            command=self.compare_profiles,
+            style="Accent.TButton",
+        ).grid(row=2, column=1, sticky=tk.W, pady=10)
+        self.compare_text = tk.Text(
+            parent,
+            wrap=tk.WORD,
+            background="#070b08",
+            foreground="#f2f5f2",
+            insertbackground="#72e000",
+            relief=tk.FLAT,
+            padx=12,
+            pady=10,
+        )
+        self.compare_text.grid(row=3, column=0, columnspan=2, sticky="nsew")
+        self.compare_text.insert(
+            tk.END,
+            "Choose two indexed profiles to compare saves and imported achievements.",
+        )
+        self.compare_text.configure(state=tk.DISABLED)
+
+    def _build_xenia(self, parent: ttk.Frame) -> None:
+        parent.columnconfigure(1, weight=1)
+        parent.rowconfigure(3, weight=1)
+        candidates = [str(path) for path in candidate_xenia_content_roots()]
+        self.xenia_root_var = tk.StringVar(value=candidates[0] if candidates else "")
+        self.xenia_target_var = tk.StringVar()
+        ttk.Label(parent, text="Xenia folder or content root").grid(
+            row=0, column=0, sticky=tk.W
+        )
+        ttk.Entry(parent, textvariable=self.xenia_root_var).grid(
+            row=0, column=1, sticky="ew", padx=8
+        )
+        ttk.Button(parent, text="Browse", command=self.choose_xenia_root).grid(
+            row=0, column=2
+        )
+        ttk.Label(parent, text="Target profile ID").grid(
+            row=1, column=0, sticky=tk.W, pady=(8, 0)
+        )
+        ttk.Entry(parent, textvariable=self.xenia_target_var).grid(
+            row=1, column=1, sticky="ew", padx=8, pady=(8, 0)
+        )
+        controls = ttk.Frame(parent)
+        controls.grid(row=2, column=0, columnspan=3, sticky="ew", pady=10)
+        ttk.Button(
+            controls,
+            text="Preview Migration",
+            command=self.preview_xenia_migration,
+            style="Accent.TButton",
+        ).pack(side=tk.LEFT)
+        self.xenia_execute_button = ttk.Button(
+            controls,
+            text="Create Snapshot and Migrate",
+            command=self.execute_xenia_migration,
+            state=tk.DISABLED,
+        )
+        self.xenia_execute_button.pack(side=tk.LEFT, padx=(8, 0))
+        self.migration_tree = ttk.Treeview(
+            parent,
+            columns=("titleid", "file", "action", "reason"),
+            show="headings",
+        )
+        for column, label, width in (
+            ("titleid", "TitleID", 90),
+            ("file", "Save", 300),
+            ("action", "Action", 80),
+            ("reason", "Reason", 320),
+        ):
+            self.migration_tree.heading(column, text=label)
+            self.migration_tree.column(column, width=width, anchor=tk.W)
+        self.migration_tree.grid(row=3, column=0, columnspan=3, sticky="nsew")
+        ttk.Label(
+            parent,
+            text=(
+                "Migration is previewed first. A verified save snapshot is created "
+                "before any copy, and different destination files are never overwritten."
+            ),
+            style="Subheader.TLabel",
+            wraplength=900,
+        ).grid(row=4, column=0, columnspan=3, sticky="ew", pady=(8, 0))
+
     def choose_source(self) -> None:
         selected = filedialog.askdirectory(
             parent=self.root,
@@ -279,9 +466,138 @@ class ProfileSavePage:
             "scan-complete",
         )
 
+    def import_gpd(self) -> None:
+        path = filedialog.askopenfilename(
+            parent=self.root,
+            title="Choose an extracted Xbox 360 GPD",
+            filetypes=(("GPD databases", "*.gpd"), ("All files", "*.*")),
+        )
+        if not path:
+            return
+        profile_id = self._selected_profile_id()
+        self._run(
+            "Reading the GPD database...",
+            lambda: self.intelligence.import_gpd(path, profile_id=profile_id),
+            "gpd-complete",
+        )
+
+    def scan_gpd_folder(self) -> None:
+        path = filedialog.askdirectory(
+            parent=self.root,
+            title="Choose a folder containing extracted GPD files",
+        )
+        if not path:
+            return
+        profile_id = self._selected_profile_id()
+        self._run(
+            "Finding and reading extracted GPD databases...",
+            lambda: self.intelligence.scan_gpd_directory(
+                path, profile_id=profile_id
+            ),
+            "gpd-scan-complete",
+        )
+
+    def compare_profiles(self) -> None:
+        left = self.profile_choices.get(self.compare_left_var.get(), "")
+        right = self.profile_choices.get(self.compare_right_var.get(), "")
+        if not left or not right:
+            messagebox.showinfo(
+                "Compare profiles",
+                "Choose two indexed profiles first.",
+                parent=self.root,
+            )
+            return
+        try:
+            result = self.intelligence.compare_profiles(left, right)
+        except Exception as exc:
+            messagebox.showerror("Comparison failed", str(exc), parent=self.root)
+            return
+        lines = [
+            "PROFILE COMPARISON",
+            "",
+            f"Identical save titles: {len(result['save_titles_identical'])}",
+            f"Different save titles: {len(result['save_titles_different'])}",
+            f"Only in first profile: {', '.join(result['save_titles_only_left']) or 'None'}",
+            f"Only in second profile: {', '.join(result['save_titles_only_right']) or 'None'}",
+            "",
+            f"Shared unlocked achievements: {result['achievements_shared']}",
+            f"Unlocked only in first: {len(result['achievements_only_left'])}",
+            f"Unlocked only in second: {len(result['achievements_only_right'])}",
+            "",
+            "This is a read-only comparison. No profile or save was changed.",
+        ]
+        self.compare_text.configure(state=tk.NORMAL)
+        self.compare_text.delete("1.0", tk.END)
+        self.compare_text.insert(tk.END, "\n".join(lines))
+        self.compare_text.configure(state=tk.DISABLED)
+
+    def choose_xenia_root(self) -> None:
+        path = filedialog.askdirectory(
+            parent=self.root,
+            title="Choose Xenia folder or content directory",
+        )
+        if path:
+            self.xenia_root_var.set(path)
+
+    def preview_xenia_migration(self) -> None:
+        profile_id = self._selected_profile_id()
+        if not profile_id:
+            messagebox.showinfo(
+                "Xenia migration", "Select a source profile first.", parent=self.root
+            )
+            return
+        target_id = self.xenia_target_var.get().strip() or profile_id
+        try:
+            self.migration_plan = self.intelligence.preview_xenia_migration(
+                profile_id,
+                self.xenia_root_var.get(),
+                target_profile_id=target_id,
+            )
+        except Exception as exc:
+            messagebox.showerror("Migration preview failed", str(exc), parent=self.root)
+            return
+        self.migration_tree.delete(*self.migration_tree.get_children())
+        for index, item in enumerate(self.migration_plan.items):
+            self.migration_tree.insert(
+                "",
+                tk.END,
+                iid=f"migration-{index}",
+                values=(
+                    item.title_id,
+                    item.relative_path.name,
+                    item.action.title(),
+                    item.reason,
+                ),
+            )
+        self.xenia_execute_button.configure(
+            state=tk.NORMAL if self.migration_plan.copy_count else tk.DISABLED
+        )
+        self.status_var.set(
+            f"Migration preview: {self.migration_plan.copy_count} copies, "
+            f"{self.migration_plan.conflict_count} conflicts."
+        )
+
+    def execute_xenia_migration(self) -> None:
+        plan = self.migration_plan
+        if plan is None:
+            return
+        if not messagebox.askyesno(
+            "Migrate saves to Xenia",
+            "Create a verified snapshot, then copy every non-conflicting save "
+            "shown in the preview?",
+            parent=self.root,
+        ):
+            return
+        self._run(
+            "Creating a snapshot and migrating saves to Xenia...",
+            lambda: self.intelligence.execute_xenia_migration(plan),
+            "xenia-complete",
+        )
+
     def refresh(self) -> None:
         self._refresh_profiles()
         self._refresh_snapshots()
+        self._refresh_gpd_files()
 
     def _refresh_profiles(self) -> None:
         selected = self._selected_profile_id()
@@ -315,7 +631,81 @@ class ProfileSavePage:
             first = self.profile_tree.get_children()[0]
             self.profile_tree.selection_set(first)
             self.profile_tree.focus(first)
+        self._refresh_profile_choices()
         self._refresh_saves()
+
+    def _refresh_profile_choices(self) -> None:
+        current_left = self.compare_left_var.get()
+        current_right = self.compare_right_var.get()
+        self.profile_choices.clear()
+        for row in self.profiles.values():
+            profile_id = str(row["profile_id"])
+            name = str(row.get("gamertag") or "Profile")
+            label = f"{name} ({mask_identifier(profile_id)})"
+            self.profile_choices[label] = profile_id
+        choices = list(self.profile_choices)
+        self.compare_left.configure(values=choices)
+        self.compare_right.configure(values=choices)
+        if current_left in self.profile_choices:
+            self.compare_left_var.set(current_left)
+        elif choices:
+            self.compare_left_var.set(choices[0])
+        if current_right in self.profile_choices:
+            self.compare_right_var.set(current_right)
+        elif len(choices) > 1:
+            self.compare_right_var.set(choices[1])
+
+    def _refresh_gpd_files(self) -> None:
+        selected = self.gpd_tree.selection() if hasattr(self, "gpd_tree") else ()
+        selected_id = selected[0] if selected else ""
+        self.gpd_files.clear()
+        self.gpd_tree.delete(*self.gpd_tree.get_children())
+        for row in self.intelligence.list_gpd_files():
+            item_id = f"gpd-{row['id']}"
+            self.gpd_files[item_id] = row
+            self.gpd_tree.insert(
+                "",
+                tk.END,
+                iid=item_id,
+                values=(
+                    row.get("titleid") or "Unknown",
+                    f"{row['unlocked_count']} / {row['achievement_count']}",
+                    f"{row['gamerscore_earned']} / {row['gamerscore_possible']}",
+                    row["status"],
+                    row["source_path"],
+                ),
+            )
+        if selected_id in self.gpd_files:
+            self.gpd_tree.selection_set(selected_id)
+        elif self.gpd_tree.get_children():
+            self.gpd_tree.selection_set(self.gpd_tree.get_children()[0])
+        self._refresh_achievements()
+
+    def _refresh_achievements(self) -> None:
+        if not hasattr(self, "achievement_tree"):
+            return
+        self.achievement_tree.delete(*self.achievement_tree.get_children())
+        selection = self.gpd_tree.selection()
+        if not selection:
+            return
+        row = self.gpd_files.get(selection[0])
+        if not row:
+            return
+        for achievement in self.intelligence.list_achievements(
+            int(row["id"]),
+            search=self.achievement_search_var.get(),
+        ):
+            self.achievement_tree.insert(
+                "",
+                tk.END,
+                values=(
+                    achievement["achievement_id"],
+                    achievement.get("title") or "Unnamed achievement",
+                    achievement["gamerscore"],
+                    str(achievement["unlock_state"]).replace("-", " ").title(),
+                    str(achievement.get("unlocked_at") or "").replace("T", " ")[:19],
+                ),
+            )
 
     def _refresh_saves(self) -> None:
         profile_id = self._selected_profile_id()
@@ -565,6 +955,31 @@ class ProfileSavePage:
                     f"Restored: {value.restored}\n"
                     f"Already present or skipped: {value.skipped}\n"
                     f"Conflicts preserved: {value.conflicts}",
+                    parent=self.root,
+                )
+            elif event == "gpd-complete":
+                self.status_var.set(f"GPD inventory record {value} imported.")
+                self._refresh_gpd_files()
+            elif event == "gpd-scan-complete":
+                self.status_var.set(
+                    f"Imported {value['imported']} GPD databases; "
+                    f"{len(value['errors'])} could not be read."
+                )
+                self._refresh_gpd_files()
+            elif event == "xenia-complete":
+                self.status_var.set(
+                    f"Xenia migration copied {value['copied']}; "
+                    f"skipped {value['skipped']}; conflicts {value['conflicts']}."
+                )
+                self.migration_plan = None
+                self.xenia_execute_button.configure(state=tk.DISABLED)
+                self._refresh_snapshots()
+                messagebox.showinfo(
+                    "Xenia migration complete",
+                    f"Snapshot: {value['snapshot_id']}\n"
+                    f"Copied: {value['copied']}\n"
+                    f"Skipped: {value['skipped']}\n"
+                    f"Conflicts: {value['conflicts']}",
                     parent=self.root,
                 )
         if self.running:

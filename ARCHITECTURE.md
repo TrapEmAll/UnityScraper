@@ -63,10 +63,12 @@ Main schema groups:
 
 - Library: `titleids`, `title_updates`, `covers`, `download_history`
 - Knowledge: sources, documents, revisions, entities, names, identifiers,
-  facts, citations, relationships, import runs, and conflicts
+  facts, citations, relationships, import runs, conflicts, source priorities,
+  conflict decisions, and scheduled sync state
 - Backups: targets, scans, inventory, and operations
-- Profiles: scan runs, profiles, saves, snapshots, snapshot files, and
-  auditable operations
+- Profiles: scan runs, profiles, saves, snapshots, snapshot files, GPD
+  inventories, achievements, comparisons, Xenia migration runs, and auditable
+  operations
 
 Schema initialization is idempotent. New migrations should preserve existing
 data and be covered by tests.
@@ -104,6 +106,22 @@ user-selected file or ZIP
 
 Game payloads are not stored in SQLite. Inventory records contain paths,
 identifiers, sizes, statuses, and notes.
+
+### Profile Intelligence
+
+```text
+standalone/extracted XDBF file
+  -> bounded table and offset validation
+  -> read-only achievement/setting parsing
+  -> local inventory and profile comparison
+
+indexed saves + Xenia content root
+  -> non-mutating migration preview
+  -> verified automatic snapshot
+  -> .partial copy and SHA-256 verification
+  -> skip identical / retain conflicts
+  -> migration audit record
+```
 
 ### Profile Snapshot
 

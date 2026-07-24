@@ -38,6 +38,9 @@ service exposes. UnityScraper does not silently substitute HTTPS URLs.
 - Imports user-supplied Redump and No-Intro XML DAT files.
 - Stores entities, identifiers, facts, citations, revisions, import runs, and
   conflicts with provenance.
+- Supports per-property source priorities and records explicit conflict
+  decisions without deleting competing claims.
+- Offers an opt-in app-start refresh schedule with a minimum six-hour interval.
 - Fills blank or unknown local metadata without replacing better known values.
 
 ### Backup Management
@@ -53,6 +56,8 @@ service exposes. UnityScraper does not silently substitute HTTPS URLs.
   manifest.
 - Queues resumable uploads and downloads to a configured Aurora-style FTP server.
 - Captures read-only console inventories and compares PC and console content.
+- Can opt into remote SHA-256 verification when the selected FTP dashboard
+  advertises a compatible read-only hash command.
 - Runs a user-selected external ISO converter without bundling converter code.
 
 ### Profiles and Save Data
@@ -67,10 +72,14 @@ service exposes. UnityScraper does not silently substitute HTTPS URLs.
   verified atomic copies.
 - Restores snapshots without overwriting different existing files.
 - Exports portable JSON preservation manifests.
+- Reads extracted XDBF/GPD achievement databases without modifying them.
+- Compares save hashes and imported achievement state across two profiles.
+- Previews Xenia save mappings and creates a verified snapshot before migration.
 
 The profile/package model is informed by Dalavin, also known as DJ
 SkunkieButt, and the GPLv3 X360 library and Le Fluffie source. See
-[PROFILES_AND_SAVES.md](PROFILES_AND_SAVES.md) and
+[PROFILES_AND_SAVES.md](PROFILES_AND_SAVES.md),
+[PROFILE_INTELLIGENCE.md](PROFILE_INTELLIGENCE.md), and
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ### External Tools
@@ -167,7 +176,7 @@ Linux source setup:
 | Add Games | Search cached game names, select TitleIDs, or import lists |
 | Downloads | Review and manage download activity |
 | Backup Manager | Scan, install, verify, export, convert, and transfer owned content |
-| Profiles & Saves | Inventory profiles, back up saves, and restore snapshots |
+| Profiles & Saves | Inventory profiles, inspect achievements, compare, snapshot, restore, and migrate to Xenia |
 | External Tools | Run XeXTool and other user-supplied command-line utilities |
 | Collections | Identify storage, compare Title Updates, verify preservation data, and preview repairs |
 | Knowledge | Search sources, facts, citations, imports, and conflicts |

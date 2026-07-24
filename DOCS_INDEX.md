@@ -7,6 +7,8 @@
   verification, and external conversion
 - [Profiles and Saves](PROFILES_AND_SAVES.md) - profile inventory, save
   snapshots, privacy, restore behavior, and Le Fluffie attribution
+- [Profile Intelligence and Xenia](PROFILE_INTELLIGENCE.md) - read-only GPD
+  achievements, profile comparison, and snapshot-first Xenia migration
 - [Collection Intelligence](COLLECTION_INTELLIGENCE.md) - storage discovery,
   XEX identity, Title Update compatibility, preservation, and repair previews
 - [Console Sync](CONSOLE_SYNC.md) - persistent transfers, resume, snapshots,

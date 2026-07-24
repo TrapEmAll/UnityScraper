@@ -1428,6 +1428,186 @@ class TestProfileSaveManager(unittest.TestCase):
         self.assertIn("DJ SkunkieButt", payload["attribution"])
 
 
+class TestRoadmapFeatures(unittest.TestCase):
+    """Read-only GPD, Xenia, knowledge, and verification roadmap coverage."""
+
+    PROFILE_ID = "E000012345678BD2"
+    TITLE_ID = "53510804"
+
+    def setUp(self):
+        self.temp_dir = Path(tempfile.mkdtemp())
+        self.db_path = self.temp_dir / "roadmap.db"
+        DatabaseManager(str(self.db_path))
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir)
+
+    @staticmethod
+    def _gpd_bytes(unlocked=True):
+        import struct
+
+        strings = b"".join(
+            value.encode("utf-16-be") + b"\0\0"
+            for value in ("First Steps", "Locked text", "Unlocked text")
+        )
+        payload = bytearray(0x1C)
+        payload[:4] = (0x1C).to_bytes(4, "big")
+        payload[4:8] = (7).to_bytes(4, "big", signed=True)
+        payload[8:12] = (42).to_bytes(4, "big", signed=True)
+        payload[12:16] = (25).to_bytes(4, "big")
+        payload[16:20] = bytes((0, 0x12 if unlocked else 0, 0, 0))
+        entry_payload = bytes(payload) + strings
+        header = struct.pack(">4sIIIII", b"XDBF", 1, 1, 1, 0, 0)
+        entry = struct.pack(">Hqii", 1, 100, 0, len(entry_payload))
+        return header + entry + entry_payload
+
+    def test_gpd_parser_reads_achievement_without_modifying_file(self):
+        from gpd_parser import parse_gpd
+
+        path = self.temp_dir / f"{self.TITLE_ID}.gpd"
+        original = self._gpd_bytes()
+        path.write_bytes(original)
+        report = parse_gpd(path)
+
+        self.assertEqual(report.title_id, self.TITLE_ID)
+        self.assertEqual(report.unlocked_count, 1)
+        self.assertEqual(report.gamerscore_earned, 25)
+        self.assertEqual(report.achievements[0].title, "First Steps")
+        self.assertEqual(path.read_bytes(), original)
+
+    def test_profile_intelligence_imports_and_compares_achievements(self):
+        from profile_intelligence import ProfileIntelligenceService
+
+        left = self.temp_dir / f"{self.TITLE_ID}.gpd"
+        right = self.temp_dir / "right" / f"{self.TITLE_ID}.gpd"
+        right.parent.mkdir()
+        left.write_bytes(self._gpd_bytes(unlocked=True))
+        right.write_bytes(self._gpd_bytes(unlocked=False))
+        service = ProfileIntelligenceService(self.db_path)
+        left_id = service.import_gpd(left, profile_id=self.PROFILE_ID)
+        service.import_gpd(right, profile_id="E000000000000002")
+
+        self.assertEqual(len(service.list_achievements(left_id)), 1)
+        comparison = service.compare_profiles(
+            self.PROFILE_ID, "E000000000000002"
+        )
+        self.assertEqual(len(comparison["achievements_only_left"]), 1)
+        self.assertEqual(len(comparison["achievements_only_right"]), 0)
+
+    def test_xenia_plan_copies_then_skips_identical_save(self):
+        from xenia_bridge import build_migration_plan, execute_migration_plan
+
+        source = (
+            self.temp_dir
+            / self.PROFILE_ID
+            / self.TITLE_ID
+            / "00000001"
+            / "save.bin"
+        )
+        source.parent.mkdir(parents=True)
+        source.write_bytes(b"user-owned-save")
+        destination = self.temp_dir / "xenia" / "content"
+        plan = build_migration_plan(
+            [(source, self.TITLE_ID)],
+            destination,
+            source_profile_id=self.PROFILE_ID,
+            target_profile_id=self.PROFILE_ID,
+        )
+        self.assertEqual(plan.copy_count, 1)
+        self.assertEqual(execute_migration_plan(plan), (1, 0, 0))
+        second = build_migration_plan(
+            [(source, self.TITLE_ID)],
+            destination,
+            source_profile_id=self.PROFILE_ID,
+            target_profile_id=self.PROFILE_ID,
+        )
+        self.assertEqual(second.items[0].action, "skip")
+
+    def test_knowledge_priority_and_conflict_resolution_are_persistent(self):
+        import sqlite3
+        from contextlib import closing
+
+        from knowledge_base import KnowledgeRepository
+
+        service = KnowledgeService(self.db_path)
+        sources = service.list_sources()
+        source = sources[0]
+        other_source = sources[1]
+        service.set_source_priority(int(source["id"]), "publisher", 10)
+        service.set_source_priority(int(other_source["id"]), "publisher", 20)
+        priority = [
+            row
+            for row in service.list_priorities()
+            if row.get("property") == "publisher"
+        ][0]
+        self.assertEqual(priority["priority"], 10)
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            connection.row_factory = sqlite3.Row
+            entity = connection.execute(
+                """
+                INSERT INTO knowledge_entities(
+                    entity_type, canonical_name, normalized_name
+                ) VALUES ('game', 'Example', 'example')
+                """
+            )
+            entity_id = int(entity.lastrowid)
+            conflict = connection.execute(
+                """
+                INSERT INTO knowledge_conflicts(
+                    entity_id, property, existing_value, incoming_value,
+                    existing_source_id, incoming_source_id, detected_at
+                ) VALUES (?, 'publisher', 'A', 'B', ?, ?, 'now')
+                """,
+                (entity_id, source["id"], other_source["id"]),
+            )
+            connection.executemany(
+                """
+                INSERT INTO knowledge_facts(
+                    entity_id, property, value, normalized_value,
+                    source_id, confidence, imported_at
+                ) VALUES (?, 'publisher', ?, ?, ?, ?, 'now')
+                """,
+                (
+                    (entity_id, "A", "a", source["id"], 0.70),
+                    (entity_id, "B", "b", other_source["id"], 0.99),
+                ),
+            )
+            connection.commit()
+            conflict_id = int(conflict.lastrowid)
+            preferred = KnowledgeRepository(connection).get_preferred_facts(
+                entity_id, ("publisher",)
+            )
+            self.assertEqual(preferred["publisher"]["value"], "A")
+        result = service.resolve_conflict(conflict_id, "prefer_incoming")
+        self.assertEqual(result["preferred_value"], "B")
+        self.assertEqual(service.list_conflicts(), [])
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            connection.row_factory = sqlite3.Row
+            preferred = KnowledgeRepository(connection).get_preferred_facts(
+                entity_id, ("publisher",)
+            )
+        self.assertEqual(preferred["publisher"]["value"], "B")
+
+    def test_scheduler_runs_only_when_enabled_and_due(self):
+        from knowledge_scheduler import KnowledgeScheduler
+
+        scheduler = KnowledgeScheduler(self.db_path)
+        self.assertIsNone(scheduler.run_if_due(lambda: "unused"))
+        scheduler.configure(True, 24)
+        calls = []
+        result = scheduler.run_if_due(lambda: calls.append("run") or "done")
+        self.assertEqual(calls, ["run"])
+        self.assertEqual(result["result"], "done")
+        self.assertIsNone(scheduler.run_if_due(lambda: calls.append("again")))
+
+    def test_remote_sha256_detects_supported_read_only_command(self):
+        from console_sync import _remote_sha256
+
+        ftp = Mock()
+        ftp.sendcmd.return_value = "213 " + ("AB" * 32)
+        self.assertEqual(_remote_sha256(ftp, "/Hdd1/save"), ("ab" * 32))
+
+
 class TestUnifiedV1Foundation(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
@@ -1451,7 +1631,7 @@ class TestUnifiedV1Foundation(unittest.TestCase):
             versions = connection.execute(
                 "SELECT version FROM app_schema_migrations ORDER BY version"
             ).fetchall()
-        self.assertEqual([row[0] for row in versions], [1, 2, 3, 4, 5, 6])
+        self.assertEqual([row[0] for row in versions], [1, 2, 3, 4, 5, 6, 7])
         self.assertIn("collection_snapshots", tables)
         self.assertIn("preservation_matches", tables)
         self.assertIn("console_transfer_jobs", tables)
@@ -1461,6 +1641,11 @@ class TestUnifiedV1Foundation(unittest.TestCase):
         self.assertIn("profile_saves", tables)
         self.assertIn("save_snapshots", tables)
         self.assertIn("profile_save_operations", tables)
+        self.assertIn("profile_gpd_files", tables)
+        self.assertIn("profile_achievements", tables)
+        self.assertIn("xenia_migration_runs", tables)
+        self.assertIn("knowledge_source_priorities", tables)
+        self.assertIn("scheduled_sync_state", tables)
 
     def test_xex_execution_info_is_parsed(self):
         from backup_manager import inspect_xex
@@ -1575,6 +1760,7 @@ def run_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestBackupManager))
     suite.addTests(loader.loadTestsFromTestCase(TestRestAPI))
     suite.addTests(loader.loadTestsFromTestCase(TestProfileSaveManager))
+    suite.addTests(loader.loadTestsFromTestCase(TestRoadmapFeatures))
     suite.addTests(loader.loadTestsFromTestCase(TestUnifiedV1Foundation))
     
     # Run tests

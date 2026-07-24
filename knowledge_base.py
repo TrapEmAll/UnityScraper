@@ -390,7 +390,9 @@ class KnowledgeRepository:
             """,
             (source_slug, adapter_name, utc_now()),
         )
-        return int(cursor.lastrowid)
+        if cursor.lastrowid is None:
+            raise RuntimeError("Import run was created without an identifier")
+        return cursor.lastrowid
 
     def finish_import_run(
         self,
@@ -615,17 +617,57 @@ class KnowledgeRepository:
         placeholders = ",".join("?" for _ in wanted)
         rows = self.connection.execute(
             f"""
+            WITH latest_resolution AS (
+                SELECT
+                    c.entity_id,
+                    c.property,
+                    r.preferred_value,
+                    r.preferred_source_id
+                FROM knowledge_conflict_resolutions AS r
+                JOIN knowledge_conflicts AS c ON c.id = r.conflict_id
+                WHERE r.resolution IN ('prefer_existing', 'prefer_incoming')
+                  AND r.id = (
+                      SELECT MAX(newer.id)
+                      FROM knowledge_conflict_resolutions AS newer
+                      JOIN knowledge_conflicts AS newer_conflict
+                        ON newer_conflict.id = newer.conflict_id
+                      WHERE newer_conflict.entity_id = c.entity_id
+                        AND newer_conflict.property = c.property
+                        AND newer.resolution IN (
+                            'prefer_existing', 'prefer_incoming'
+                        )
+                  )
+            )
             SELECT
                 f.property,
                 f.value,
                 f.normalized_value,
                 f.confidence,
                 s.slug AS source_slug,
-                s.name AS source_name
+                s.name AS source_name,
+                COALESCE(p.priority, 100) AS source_priority
             FROM knowledge_facts AS f
             JOIN knowledge_sources AS s ON s.id = f.source_id
+            LEFT JOIN knowledge_source_priorities AS p
+              ON p.source_id = f.source_id AND p.property = f.property
+            LEFT JOIN latest_resolution AS resolution
+              ON resolution.entity_id = f.entity_id
+             AND resolution.property = f.property
             WHERE f.entity_id = ? AND f.property IN ({placeholders})
-            ORDER BY f.property, f.confidence DESC, f.imported_at DESC
+            ORDER BY
+                f.property,
+                CASE
+                    WHEN resolution.preferred_value = f.value
+                     AND (
+                         resolution.preferred_source_id IS NULL
+                         OR resolution.preferred_source_id = f.source_id
+                     )
+                    THEN 0
+                    ELSE 1
+                END,
+                source_priority,
+                f.confidence DESC,
+                f.imported_at DESC
             """,
             (entity_id, *wanted),
         ).fetchall()

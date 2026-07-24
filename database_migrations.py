@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 def _now() -> str:
@@ -67,6 +67,7 @@ def ensure_application_schema(connection: sqlite3.Connection) -> int:
         (4, "user overrides and recovery", _migration_reliability),
         (5, "XboxUnity title catalog", _migration_xboxunity_catalog),
         (6, "profile and save management", _migration_profiles_and_saves),
+        (7, "profile intelligence and knowledge controls", _migration_roadmap),
     )
     for version, name, migration in migrations:
         if version in applied:
@@ -386,3 +387,115 @@ def _migration_profiles_and_saves(connection: sqlite3.Connection) -> None:
         );
         """
     )
+
+
+def _migration_roadmap(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS profile_gpd_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            profile_id TEXT,
+            titleid TEXT,
+            source_path TEXT NOT NULL UNIQUE,
+            sha256 TEXT NOT NULL,
+            size INTEGER NOT NULL,
+            version INTEGER NOT NULL,
+            entry_count INTEGER NOT NULL,
+            achievement_count INTEGER NOT NULL DEFAULT 0,
+            unlocked_count INTEGER NOT NULL DEFAULT 0,
+            gamerscore_earned INTEGER NOT NULL DEFAULT 0,
+            gamerscore_possible INTEGER NOT NULL DEFAULT 0,
+            parsed_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'parsed',
+            warnings_json TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_profile_gpd_owner
+            ON profile_gpd_files(profile_id, titleid);
+
+        CREATE TABLE IF NOT EXISTS profile_achievements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            gpd_file_id INTEGER NOT NULL,
+            achievement_id INTEGER NOT NULL,
+            title TEXT,
+            locked_description TEXT,
+            unlocked_description TEXT,
+            gamerscore INTEGER NOT NULL DEFAULT 0,
+            unlock_state TEXT NOT NULL,
+            unlocked_at TEXT,
+            image_id INTEGER,
+            entry_id INTEGER,
+            UNIQUE(gpd_file_id, achievement_id),
+            FOREIGN KEY(gpd_file_id) REFERENCES profile_gpd_files(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_profile_achievements_state
+            ON profile_achievements(gpd_file_id, unlock_state);
+
+        CREATE TABLE IF NOT EXISTS profile_comparisons (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            left_profile_id TEXT NOT NULL,
+            right_profile_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            summary_json TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS xenia_migration_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_profile_id TEXT NOT NULL,
+            target_profile_id TEXT NOT NULL,
+            destination_root TEXT NOT NULL,
+            snapshot_id INTEGER,
+            created_at TEXT NOT NULL,
+            completed_at TEXT,
+            status TEXT NOT NULL,
+            copied_count INTEGER NOT NULL DEFAULT 0,
+            skipped_count INTEGER NOT NULL DEFAULT 0,
+            conflict_count INTEGER NOT NULL DEFAULT 0,
+            plan_json TEXT NOT NULL,
+            error_message TEXT,
+            FOREIGN KEY(snapshot_id) REFERENCES save_snapshots(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS knowledge_source_priorities (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            property TEXT NOT NULL,
+            source_id INTEGER NOT NULL,
+            priority INTEGER NOT NULL DEFAULT 100,
+            updated_at TEXT NOT NULL,
+            UNIQUE(property, source_id),
+            FOREIGN KEY(source_id) REFERENCES knowledge_sources(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS knowledge_conflict_resolutions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conflict_id INTEGER NOT NULL,
+            resolution TEXT NOT NULL,
+            preferred_value TEXT,
+            preferred_source_id INTEGER,
+            notes TEXT,
+            resolved_at TEXT NOT NULL,
+            FOREIGN KEY(conflict_id) REFERENCES knowledge_conflicts(id),
+            FOREIGN KEY(preferred_source_id) REFERENCES knowledge_sources(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS scheduled_sync_state (
+            task_name TEXT PRIMARY KEY,
+            enabled INTEGER NOT NULL DEFAULT 0,
+            interval_hours INTEGER NOT NULL DEFAULT 168,
+            last_started_at TEXT,
+            last_completed_at TEXT,
+            last_status TEXT,
+            last_error TEXT,
+            updated_at TEXT NOT NULL
+        );
+        """
+    )
+    transfer_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(console_transfer_jobs)")
+    }
+    if "verify_remote_hash" not in transfer_columns:
+        connection.execute(
+            """
+            ALTER TABLE console_transfer_jobs
+            ADD COLUMN verify_remote_hash INTEGER NOT NULL DEFAULT 0
+            """
+        )
