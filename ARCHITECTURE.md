@@ -19,6 +19,8 @@ for CLI and optional REST automation. SQLite is the durable local store.
 - `modern_gui.py` builds the dark navigation shell and core pages.
 - `knowledge_gui.py` renders knowledge search, imports, sources, and conflicts.
 - `backup_gui.py` renders inventory, package, FTP, and converter workflows.
+- `collection_gui.py` renders collection analysis, matching, reports, and
+  repair previews.
 - `setup_wizard.py` handles first-run storage setup.
 
 GUI operations that can block are dispatched to background threads and return
@@ -31,12 +33,18 @@ results to Tk's main loop.
 - `backup_service.py` coordinates scans, installs, exports, verification, FTP,
   and audit records.
 - `knowledge_sync.py` exposes complete source-import workflows to CLI and GUI.
+- `collection_intelligence.py` coordinates snapshots, exact MediaID matching,
+  health, preservation matching, repair previews, and offline exports.
+- `console_sync.py` owns durable transfer jobs, resumable FTP, remote
+  snapshots, and PC/console comparisons.
+- `database_migrations.py` applies additive schema versions and provides
+  consistent SQLite backup/restore helpers.
 
 ### Domain and Adapters
 
 - `main.py` contains the XboxUnity collector and shared configuration.
 - `resume.py` handles partial download state and verification.
-- `backup_manager.py` parses public STFS/XBE fields and performs safe
+- `backup_manager.py` parses public STFS/XBE/XEX fields and performs safe
   filesystem or FTP operations.
 - `knowledge_base.py` defines normalized knowledge records and resolution.
 - `consolemods_adapters.py`, `wiki_adapters.py`, and `dat_adapters.py` parse

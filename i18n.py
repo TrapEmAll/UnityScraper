@@ -11,7 +11,7 @@ from typing import Dict, Optional
 logger = logging.getLogger(__name__)
 
 # Supported languages
-SUPPORTED_LANGUAGES = ['en', 'es', 'fr', 'de', 'ja']
+SUPPORTED_LANGUAGES = ['en', 'es', 'fr', 'de', 'it', 'pt', 'ja']
 
 # Translation strings
 TRANSLATIONS = {
@@ -212,6 +212,31 @@ TRANSLATIONS = {
         'filter_status': 'ステータスでフィルタ:',
         'filter_date': '日付でフィルタ:',
     }
+}
+
+TRANSLATIONS['it'] = {
+    **TRANSLATIONS['en'],
+    'title': 'UnityScraper',
+    'titleids': 'TitleID:',
+    'output_dir': 'Cartella di output:',
+    'browse': 'Sfoglia',
+    'settings': 'Impostazioni',
+    'start_download': 'Avvia download',
+    'stop': 'Ferma',
+    'test_connection': 'Verifica connessione',
+    'verify_integrity': 'Verifica integrita file',
+}
+TRANSLATIONS['pt'] = {
+    **TRANSLATIONS['en'],
+    'title': 'UnityScraper',
+    'titleids': 'TitleIDs:',
+    'output_dir': 'Pasta de saida:',
+    'browse': 'Procurar',
+    'settings': 'Configuracoes',
+    'start_download': 'Iniciar download',
+    'stop': 'Parar',
+    'test_connection': 'Testar conexao',
+    'verify_integrity': 'Verificar integridade dos arquivos',
 }
 
 

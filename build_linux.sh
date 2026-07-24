@@ -26,6 +26,8 @@ install -m 0644 packaging/linux/io.github.trapemall.UnityScraper.metainfo.xml \
     "$STAGE/io.github.trapemall.UnityScraper.metainfo.xml"
 install -m 0644 assets/UnityScraper.png "$STAGE/unityscraper.png"
 install -m 0644 README.md CHANGELOG.md LICENSE "$STAGE/"
+install -m 0644 DOCS_INDEX.md BACKUP_MANAGER.md COLLECTION_INTELLIGENCE.md \
+    CONSOLE_SYNC.md KNOWLEDGE_SOURCES.md LINUX.md PLUGIN_API.md "$STAGE/"
 
 tar -C dist -czf "$ARCHIVE" "UnityScraper-Linux-${ARCH}"
 sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"

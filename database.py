@@ -13,6 +13,7 @@ from typing import List, Dict, Optional, Any
 from contextlib import contextmanager
 from app_paths import DATABASE_PATH, ensure_app_dirs
 from backup_service import ensure_backup_schema
+from database_migrations import ensure_application_schema
 from knowledge_base import KnowledgeRepository, is_unknown
 
 logger = logging.getLogger(__name__)
@@ -144,6 +145,7 @@ class DatabaseManager:
 
             KnowledgeRepository(conn).ensure_schema()
             ensure_backup_schema(conn)
+            ensure_application_schema(conn)
             
             logger.info(f"Database initialized at {self.db_path}")
     

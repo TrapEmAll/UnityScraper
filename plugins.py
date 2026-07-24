@@ -3,7 +3,9 @@ Plugin System for UnityScraper
 Allows custom metadata collectors and extensions
 """
 
+import json
 import logging
+from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -11,6 +13,38 @@ import importlib.util
 import sys
 
 logger = logging.getLogger(__name__)
+PLUGIN_API_VERSION = 1
+
+
+@dataclass(frozen=True)
+class PluginManifest:
+    """Stable v1 plugin contract. Plugin code is only loaded when enabled."""
+
+    plugin_id: str
+    name: str
+    version: str
+    api_version: int
+    entrypoint: str
+    permissions: tuple[str, ...] = ()
+
+    @classmethod
+    def load(cls, path: Path) -> "PluginManifest":
+        data = json.loads(path.read_text(encoding="utf-8"))
+        manifest = cls(
+            plugin_id=str(data["id"]),
+            name=str(data["name"]),
+            version=str(data["version"]),
+            api_version=int(data["api_version"]),
+            entrypoint=str(data["entrypoint"]),
+            permissions=tuple(str(value) for value in data.get("permissions", [])),
+        )
+        if manifest.api_version != PLUGIN_API_VERSION:
+            raise ValueError(
+                f"Plugin API {manifest.api_version} is unsupported; expected {PLUGIN_API_VERSION}"
+            )
+        if "/" in manifest.entrypoint or "\\" in manifest.entrypoint:
+            raise ValueError("Plugin entrypoint must be a file in its plugin directory")
+        return manifest
 
 
 class MetadataCollectorPlugin(ABC):
@@ -40,9 +74,17 @@ class MetadataCollectorPlugin(ABC):
 class PluginManager:
     """Manages loading and executing plugins"""
     
-    def __init__(self, plugin_dir: str = "plugins"):
+    def __init__(
+        self,
+        plugin_dir: str = "plugins",
+        enabled_plugins: Optional[List[str]] = None,
+        allow_legacy: bool = False,
+    ):
         self.plugin_dir = Path(plugin_dir)
         self.plugins: Dict[str, MetadataCollectorPlugin] = {}
+        self.manifests: Dict[str, PluginManifest] = {}
+        self.enabled_plugins = set(enabled_plugins or [])
+        self.allow_legacy = allow_legacy
         self._load_plugins()
     
     def _load_plugins(self):
@@ -51,16 +93,22 @@ class PluginManager:
             logger.debug(f"Plugin directory not found: {self.plugin_dir}")
             return
         
-        for plugin_file in self.plugin_dir.glob("*.py"):
-            if plugin_file.name.startswith("_"):
-                continue
-            
+        for manifest_path in self.plugin_dir.glob("*/plugin.json"):
             try:
-                self._load_plugin_file(plugin_file)
+                manifest = PluginManifest.load(manifest_path)
+                self.manifests[manifest.plugin_id] = manifest
+                if manifest.plugin_id in self.enabled_plugins:
+                    self._load_plugin_file(manifest_path.parent / manifest.entrypoint, manifest)
             except Exception as e:
-                logger.warning(f"Failed to load plugin {plugin_file.name}: {e}")
+                logger.warning(f"Failed to load plugin {manifest_path}: {e}")
+        if self.allow_legacy:
+            for plugin_file in self.plugin_dir.glob("*.py"):
+                if not plugin_file.name.startswith("_"):
+                    self._load_plugin_file(plugin_file)
     
-    def _load_plugin_file(self, file_path: Path):
+    def _load_plugin_file(
+        self, file_path: Path, manifest: Optional[PluginManifest] = None
+    ):
         """Load a single plugin file"""
         spec = importlib.util.spec_from_file_location(file_path.stem, file_path)
         if spec and spec.loader:
@@ -76,6 +124,9 @@ class PluginManager:
                     attr is not MetadataCollectorPlugin):
                     
                     instance = attr()
+                    if manifest:
+                        instance.name = manifest.name
+                        instance.version = manifest.version
                     self.plugins[instance.name] = instance
                     logger.info(f"Loaded plugin: {instance.name} v{instance.version}")
     
@@ -86,6 +137,21 @@ class PluginManager:
     def list_plugins(self) -> List[str]:
         """List all loaded plugins"""
         return list(self.plugins.keys())
+
+    def list_available_plugins(self) -> List[Dict[str, Any]]:
+        """List discovered plugins without importing disabled code."""
+        return [
+            {
+                "id": manifest.plugin_id,
+                "name": manifest.name,
+                "version": manifest.version,
+                "api_version": manifest.api_version,
+                "permissions": list(manifest.permissions),
+                "enabled": manifest.plugin_id in self.enabled_plugins,
+                "loaded": manifest.name in self.plugins,
+            }
+            for manifest in self.manifests.values()
+        ]
     
     def collect_from_plugin(self, plugin_name: str, titleid: str) -> Optional[Dict[str, Any]]:
         """Collect metadata using specific plugin"""

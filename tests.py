@@ -516,6 +516,21 @@ class TestKnowledgeApplication(unittest.TestCase):
         self.assertIn(("serial", "AB-1234"), identifiers)
         self.assertIn(("crc32", "1234ABCD"), identifiers)
         self.assertIn(("sha1", "0123456789ABCDEF0123456789ABCDEF01234567"), identifiers)
+        facts = {(item.property, item.value) for item in records[0].facts}
+        self.assertIn(("release_group", "Example Game"), facts)
+
+    def test_dat_name_tags_add_release_relationship_facts(self):
+        sample = """
+        <datafile><game name="Example Game (Europe) (En,Fr) (Rev 2) (Disc 1 of 2)">
+          <rom name="example.iso" size="1" crc="00000000"/>
+        </game></datafile>
+        """
+        record = parse_dat(sample, "disc_release")[0]
+        facts = {(item.property, item.value) for item in record.facts}
+        self.assertIn(("region", "Europe"), facts)
+        self.assertIn(("languages", "En, Fr"), facts)
+        self.assertIn(("revision", "Rev 2"), facts)
+        self.assertIn(("disc_count", "2"), facts)
 
     def test_parse_sitemap_and_article(self):
         sitemap = """
@@ -1009,6 +1024,125 @@ class TestRestAPI(unittest.TestCase):
         self.assertFalse(self.scraper.config.use_https)
 
 
+class TestUnifiedV1Foundation(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = Path(self.temp_dir) / "library.db"
+        self.database = DatabaseManager(str(self.db_path))
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir)
+
+    def test_versioned_migrations_create_all_foundation_tables(self):
+        import sqlite3
+        from contextlib import closing
+
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            versions = connection.execute(
+                "SELECT version FROM app_schema_migrations ORDER BY version"
+            ).fetchall()
+        self.assertEqual([row[0] for row in versions], [1, 2, 3, 4])
+        self.assertIn("collection_snapshots", tables)
+        self.assertIn("preservation_matches", tables)
+        self.assertIn("console_transfer_jobs", tables)
+        self.assertIn("metadata_overrides", tables)
+
+    def test_xex_execution_info_is_parsed(self):
+        from backup_manager import inspect_xex
+
+        payload = bytearray(0x200)
+        payload[:4] = b"XEX2"
+        payload[4:8] = (8).to_bytes(4, "big")
+        payload[0x14:0x18] = (1).to_bytes(4, "big")
+        payload[0x18:0x1C] = (0x00040006).to_bytes(4, "big")
+        payload[0x1C:0x20] = (0x80).to_bytes(4, "big")
+        payload[0x80:0x84] = bytes.fromhex("11223344")
+        payload[0x84:0x88] = (0x12345678).to_bytes(4, "big")
+        payload[0x88:0x8C] = (0x10000001).to_bytes(4, "big")
+        payload[0x8C:0x90] = bytes.fromhex("4D5307E6")
+        payload[0x92] = 1
+        payload[0x93] = 2
+        xex = Path(self.temp_dir) / "default.xex"
+        xex.write_bytes(payload)
+        result = inspect_xex(xex)
+        self.assertEqual(result.title_id, "4D5307E6")
+        self.assertEqual(result.media_id, "11223344")
+        self.assertEqual((result.disc_number, result.disc_count), (1, 2))
+
+    def test_aurora_database_is_imported_read_only(self):
+        import sqlite3
+        from contextlib import closing
+        from collection_intelligence import import_aurora_database
+
+        aurora = Path(self.temp_dir) / "content.db"
+        with closing(sqlite3.connect(aurora)) as connection:
+            connection.execute(
+                "CREATE TABLE ContentItems(TitleId TEXT, Name TEXT, MediaId TEXT, Path TEXT)"
+            )
+            connection.execute(
+                "INSERT INTO ContentItems VALUES(?, ?, ?, ?)",
+                ("4D5307E6", "Halo 3", "11223344", "/Hdd1/Games/Halo 3"),
+            )
+            connection.commit()
+        result = import_aurora_database(aurora)
+        self.assertEqual(len(result.items), 1)
+        self.assertEqual(result.items[0].title_id, "4D5307E6")
+        self.assertEqual(result.items[0].media_id, "11223344")
+
+    def test_collection_analysis_uses_exact_media_id(self):
+        from backup_manager import BackupItem, ScanResult
+        from collection_intelligence import CollectionIntelligenceService
+
+        self.database.add_titleid("4D5307E6", "Halo 3")
+        self.database.add_title_update(
+            "4D5307E6", "11223344", "6.0.1", "http://xboxunity.net/example"
+        )
+        item = BackupItem(
+            Path(self.temp_dir) / "Halo 3",
+            "4D5307E6",
+            "Halo 3",
+            "Extracted Xbox 360",
+            100,
+            media_id="11223344",
+        )
+        result = ScanResult(Path(self.temp_dir), [item], [], "2026-07-23T00:00:00Z")
+        analysis = CollectionIntelligenceService(self.db_path).analyze_result(result, "test")
+        self.assertEqual(analysis.compatibility[str(item.path)].status, "compatible")
+        self.assertEqual(analysis.health_score, 100)
+
+    def test_console_queue_recovers_interrupted_job(self):
+        import sqlite3
+        from contextlib import closing
+        from console_sync import ConsoleSyncService
+
+        service = ConsoleSyncService(self.db_path)
+        job_id = service.enqueue("download", Path(self.temp_dir) / "file.bin", "/Hdd1/file.bin")
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            connection.execute(
+                "UPDATE console_transfer_jobs SET status='transferring' WHERE id=?", (job_id,)
+            )
+            connection.commit()
+        recovered = ConsoleSyncService(self.db_path).list_jobs()[0]
+        self.assertEqual(recovered["status"], "paused")
+
+    def test_updater_selects_platform_asset_and_ignores_checksum(self):
+        from updater import VersionChecker
+
+        assets = [
+            {"name": "UnityScraper-Windows-x64.zip.sha256"},
+            {"name": "UnityScraper-Windows-x64.zip"},
+            {"name": "UnityScraper-Linux-x86_64.tar.gz"},
+        ]
+        selected = VersionChecker.select_asset(assets, "Windows")
+        self.assertEqual(selected["name"], "UnityScraper-Windows-x64.zip")
+
+
 def run_tests():
     """Run all tests"""
     # Create test suite
@@ -1029,6 +1163,7 @@ def run_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestIntegration))
     suite.addTests(loader.loadTestsFromTestCase(TestBackupManager))
     suite.addTests(loader.loadTestsFromTestCase(TestRestAPI))
+    suite.addTests(loader.loadTestsFromTestCase(TestUnifiedV1Foundation))
     
     # Run tests
     runner = unittest.TextTestRunner(verbosity=2)

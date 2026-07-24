@@ -76,6 +76,19 @@ class XbePackage:
     size: int
 
 
+@dataclass(frozen=True)
+class XexPackage:
+    path: Path
+    title_id: str
+    media_id: str
+    version: str
+    base_version: str
+    disc_number: int
+    disc_count: int
+    module_flags: int
+    size: int
+
+
 @dataclass
 class BackupItem:
     path: Path
@@ -87,6 +100,8 @@ class BackupItem:
     content_type: str = ""
     status: str = "ready"
     notes: list[str] = field(default_factory=list)
+    disc_number: int = 0
+    disc_count: int = 0
 
     def to_dict(self) -> dict:
         result = asdict(self)
@@ -195,6 +210,53 @@ def inspect_xbe(path: str | Path) -> XbePackage:
     return XbePackage(package_path, title_id, title_name, package_path.stat().st_size)
 
 
+def inspect_xex(path: str | Path) -> XexPackage:
+    """Read the public XEX2 execution-info header without decrypting content."""
+    package_path = Path(path)
+    with package_path.open("rb") as handle:
+        header = handle.read(0x4000)
+    if len(header) < 0x18 or header[:4] != b"XEX2":
+        raise InvalidPackageError(f"{package_path.name} is not an XEX2 executable")
+
+    module_flags = int.from_bytes(header[4:8], "big")
+    optional_count = int.from_bytes(header[0x14:0x18], "big")
+    if optional_count > 4096 or 0x18 + optional_count * 8 > len(header):
+        raise InvalidPackageError("XEX optional-header table is invalid")
+
+    execution_offset = 0
+    for index in range(optional_count):
+        entry = 0x18 + index * 8
+        key = int.from_bytes(header[entry : entry + 4], "big")
+        value = int.from_bytes(header[entry + 4 : entry + 8], "big")
+        if key == 0x00040006:
+            execution_offset = value
+            break
+    if not execution_offset or execution_offset + 24 > len(header):
+        raise InvalidPackageError("XEX execution metadata is unavailable")
+
+    info = header[execution_offset : execution_offset + 24]
+
+    def format_version(value: int) -> str:
+        return (
+            f"{(value >> 28) & 0xF}."
+            f"{(value >> 24) & 0xF}."
+            f"{(value >> 8) & 0xFFFF}."
+            f"{value & 0xFF}"
+        )
+
+    return XexPackage(
+        path=package_path,
+        title_id=info[12:16].hex().upper(),
+        media_id=info[0:4].hex().upper(),
+        version=format_version(int.from_bytes(info[4:8], "big")),
+        base_version=format_version(int.from_bytes(info[8:12], "big")),
+        disc_number=info[18],
+        disc_count=info[19],
+        module_flags=module_flags,
+        size=package_path.stat().st_size,
+    )
+
+
 def sha256_file(path: str | Path) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as handle:
@@ -255,6 +317,8 @@ def scan_local_target(
             notes = []
             package_names: list[str] = []
             media_ids: set[str] = set()
+            disc_numbers: set[int] = set()
+            disc_count = 0
             malformed = 0
             for type_name in sorted(types & set(CONTENT_TYPES[value][1] for value in CONTENT_TYPES)):
                 for package_path in (title_dir / type_name).iterdir():
@@ -267,6 +331,9 @@ def scan_local_target(
                         continue
                     if package.media_id and package.media_id != "00000000":
                         media_ids.add(package.media_id)
+                    if package.disc_number:
+                        disc_numbers.add(package.disc_number)
+                    disc_count = max(disc_count, package.disc_count)
                     candidate_name = package.title_name or package.display_name
                     if candidate_name:
                         package_names.append(candidate_name)
@@ -275,6 +342,11 @@ def scan_local_target(
                 warnings.append(f"{title_id} has support content but no base game")
             if malformed:
                 notes.append(f"{malformed} package header(s) could not be identified")
+            if disc_count:
+                notes.append(
+                    f"Discs found: {', '.join(str(value) for value in sorted(disc_numbers))} "
+                    f"of {disc_count}"
+                )
             name = title_lookup(title_id) if title_lookup else None
             items.append(
                 BackupItem(
@@ -291,6 +363,8 @@ def scan_local_target(
                     size=directory_size(title_dir),
                     status=status,
                     notes=notes,
+                    disc_number=min(disc_numbers) if len(disc_numbers) == 1 else 0,
+                    disc_count=disc_count,
                 )
             )
 
@@ -301,22 +375,39 @@ def scan_local_target(
             title_name = game_dir.name
             media_id = ""
             format_name = "Extracted Xbox 360"
-            notes: list[str] = []
+            extracted_notes: list[str] = []
+            disc_number = 0
+            disc_count = 0
             xbe = game_dir / "default.xbe"
             xex = game_dir / "default.xex"
             if xbe.is_file():
                 try:
-                    info = inspect_xbe(xbe)
-                    title_id, title_name = info.title_id, info.title_name or title_name
+                    xbe_info = inspect_xbe(xbe)
+                    title_id = xbe_info.title_id
+                    title_name = xbe_info.title_name or title_name
                     format_name = "Extracted Original Xbox"
                 except BackupError as exc:
-                    notes.append(str(exc))
+                    extracted_notes.append(str(exc))
             else:
+                if xex.is_file():
+                    try:
+                        xex_info = inspect_xex(xex)
+                        title_id = xex_info.title_id
+                        media_id = xex_info.media_id if xex_info.media_id != "00000000" else ""
+                        disc_number = xex_info.disc_number
+                        disc_count = xex_info.disc_count
+                        extracted_notes.append(f"XEX version {xex_info.version}")
+                        if xex_info.disc_count:
+                            extracted_notes.append(
+                                f"Disc {xex_info.disc_number} of {xex_info.disc_count}"
+                            )
+                    except BackupError as exc:
+                        extracted_notes.append(str(exc))
                 folder_match = FOLDER_TITLE_ID_RE.search(game_dir.name)
-                if folder_match:
+                if not title_id and folder_match:
                     title_id = folder_match.group(1).upper()
                 if not xex.is_file():
-                    notes.append("default.xex or default.xbe is missing")
+                    extracted_notes.append("default.xex or default.xbe is missing")
             if title_id and title_lookup:
                 title_name = title_lookup(title_id) or title_name
             items.append(
@@ -327,8 +418,10 @@ def scan_local_target(
                     format=format_name,
                     media_id=media_id,
                     size=directory_size(game_dir),
-                    status="ready" if not notes else "incomplete",
-                    notes=notes,
+                    status="ready" if not extracted_notes else "incomplete",
+                    notes=extracted_notes,
+                    disc_number=disc_number,
+                    disc_count=disc_count,
                 )
             )
 

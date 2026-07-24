@@ -7,6 +7,20 @@ Notable changes to UnityScraper are documented here. The project follows
 
 ### Added
 
+- Versioned additive migrations for collection snapshots, preservation
+  matches, repair plans, console inventories, resumable jobs, overrides, and
+  recovery state.
+- XEX2 identity parsing, mounted-storage discovery, and immutable read-only
+  Aurora database import.
+- Exact MediaID Title Update comparison, collection health scoring, and
+  non-destructive repair-plan previews.
+- Redump/No-Intro file matching, offline HTML reports, manifests, and
+  provenance exports.
+- Persistent resumable FTP upload/download jobs, bandwidth limits, transfer
+  verification, and read-only console snapshots.
+- Database backups, plugin API v1, Italian and Portuguese translation
+  foundations, UI scaling, and keyboard navigation.
+- CycloneDX SBOM generation and GitHub build-provenance attestations.
 - Native Linux desktop support with XDG data, configuration, cache, and state
   directories.
 - Linux x86_64 release bundle with user-level installation, application-menu
@@ -21,6 +35,10 @@ Notable changes to UnityScraper are documented here. The project follows
 
 ### Changed
 
+- Version advanced to `1.0.0-beta.1`.
+- Download queues now use atomic writes and recover interrupted items.
+- Update checks select a platform artifact and require its SHA-256 sidecar
+  before staging it.
 - PyInstaller configuration and desktop entry point now support Windows and
   Linux from the same source tree.
 - Knowledge source snapshots use the platform cache directory.

@@ -57,13 +57,15 @@ structural health check, not a substitute for Redump or No-Intro verification.
 ## FTP console transfer
 
 The Console Transfer tab supports a user-configured FTP server such as Aurora.
-It uses one connection per operation and uploads to a temporary remote name
-before renaming the completed file. The default content root is:
+It persists resumable upload and download jobs, retains partial data, recovers
+interrupted jobs, limits bandwidth, verifies final sizes, and can capture a
+read-only console inventory. The default content root is:
 
 `/Hdd1/Content/0000000000000000`
 
 FTP passwords remain in memory and are deliberately omitted from SQLite.
 Traditional FTP is unencrypted, so use it only on a trusted local network.
+See [CONSOLE_SYNC.md](CONSOLE_SYNC.md) for queue and comparison behavior.
 
 ## ISO conversion
 

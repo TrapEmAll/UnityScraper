@@ -6,6 +6,8 @@ Checks for new versions and notifies user
 import logging
 import requests
 import json
+import hashlib
+import platform
 from pathlib import Path
 from typing import Optional, Dict, Tuple
 from packaging import version
@@ -65,11 +67,13 @@ class VersionChecker:
                 return None
             
             if version.parse(latest_version) > version.parse(self.current_version):
+                asset = self.select_asset(data.get("assets", []))
                 return {
                     'version': latest_version,
                     'name': data.get('name'),
                     'body': data.get('body'),
-                    'download_url': data.get('html_url'),
+                    'download_url': asset.get("browser_download_url") if asset else data.get('html_url'),
+                    'asset': asset,
                     'published_at': data.get('published_at'),
                     'source': 'github'
                 }
@@ -77,6 +81,65 @@ class VersionChecker:
             logger.debug(f"GitHub API check failed: {e}")
         
         return None
+
+    @staticmethod
+    def select_asset(assets: list[Dict], system: str | None = None) -> Optional[Dict]:
+        """Choose the packaged release matching the current desktop platform."""
+        current = (system or platform.system()).casefold()
+        machine = platform.machine().casefold()
+        preferred = []
+        if current == "windows":
+            preferred = ["windows-x64.zip", "windows"]
+        elif current == "linux":
+            preferred = ["linux-x86_64.tar.gz", "linux"]
+        elif current == "darwin":
+            preferred = ["macos", "darwin"]
+        for suffix in preferred:
+            for asset in assets:
+                name = str(asset.get("name", "")).casefold()
+                if suffix in name and not name.endswith(".sha256"):
+                    if "arm" not in name or "arm" in machine or "aarch64" in machine:
+                        return asset
+        return None
+
+    def download_verified_update(
+        self, update_info: Dict, destination: str | Path
+    ) -> Path:
+        """Download a selected package and require its published SHA-256 sidecar."""
+        asset = update_info.get("asset")
+        if not asset or not asset.get("browser_download_url"):
+            raise ValueError("No packaged update is available for this platform")
+        target_dir = Path(destination)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / asset["name"]
+        self._download(asset["browser_download_url"], target)
+
+        checksum_url = asset["browser_download_url"] + ".sha256"
+        checksum_response = requests.get(checksum_url, timeout=self.timeout)
+        checksum_response.raise_for_status()
+        expected = checksum_response.text.strip().split()[0].lower()
+        if len(expected) != 64:
+            target.unlink(missing_ok=True)
+            raise ValueError("Release checksum is malformed")
+        hasher = hashlib.sha256()
+        with target.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                hasher.update(chunk)
+        digest = hasher.hexdigest()
+        if digest != expected:
+            target.unlink(missing_ok=True)
+            raise ValueError("Downloaded update failed SHA-256 verification")
+        return target
+
+    def _download(self, url: str, target: Path) -> None:
+        temporary = target.with_suffix(target.suffix + ".partial")
+        with requests.get(url, timeout=self.timeout, stream=True) as response:
+            response.raise_for_status()
+            with temporary.open("wb") as handle:
+                for chunk in response.iter_content(1024 * 1024):
+                    if chunk:
+                        handle.write(chunk)
+        temporary.replace(target)
     
     def _check_version_file(self) -> Optional[Dict]:
         """Check version file from repository"""
