@@ -1373,7 +1373,10 @@ class TestProfileSaveManager(unittest.TestCase):
         path.write_bytes(header + b"profile-save-payload")
 
     def test_content_root_and_masking(self):
-        self.assertEqual(find_content_root(self.temp_dir / "device"), self.content)
+        self.assertEqual(
+            find_content_root(self.temp_dir / "device"),
+            self.content.resolve(),
+        )
         masked = mask_identifier(self.PROFILE_ID)
         self.assertTrue(masked.endswith("8BD2"))
         self.assertNotIn(self.PROFILE_ID, masked)
