@@ -29,6 +29,8 @@ a = Analysis(
         'knowledge_service',
         'knowledge_sync',
         'plugins',
+        'profile_gui',
+        'profile_manager',
         'updater',
         'wiki_adapters',
     ],

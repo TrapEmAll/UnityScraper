@@ -5,6 +5,8 @@
 - [README](README.md) - product overview, installation, core workflows, and CLI
 - [Backup Manager](BACKUP_MANAGER.md) - layouts, installation, exports, FTP,
   verification, and external conversion
+- [Profiles and Saves](PROFILES_AND_SAVES.md) - profile inventory, save
+  snapshots, privacy, restore behavior, and Le Fluffie attribution
 - [Collection Intelligence](COLLECTION_INTELLIGENCE.md) - storage discovery,
   XEX identity, Title Update compatibility, preservation, and repair previews
 - [Console Sync](CONSOLE_SYNC.md) - persistent transfers, resume, snapshots,

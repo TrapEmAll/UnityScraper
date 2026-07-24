@@ -45,6 +45,8 @@ from knowledge_service import KnowledgeService
 from knowledge_gui import KnowledgePage
 from library_service import GameSummary, LibraryService
 from platform_support import desktop_font_family, open_path
+from profile_gui import ProfileSavePage
+from profile_manager import ProfileSaveManager
 from setup_wizard import run_first_run_wizard
 from title_catalog import TitleSuggestion, XboxUnityTitleCatalog
 from updater import VersionChecker
@@ -53,6 +55,7 @@ from updater import VersionChecker
 APP_VERSION = DISPLAY_VERSION
 PROJECT_CREATOR = "TrapEmAll"
 XEXTOOL_CREATOR = "xorloser"
+LE_FLUFFIE_CREATOR = "Dalavin (DJ SkunkieButt)"
 COMMUNITY_MESSAGE = (
     "UnityScraper is my way of giving back to the Xbox 360 community that has "
     "kept this console alive through curiosity, preservation, homebrew, and "
@@ -324,6 +327,7 @@ class UnityScraperDesktop:
         self.library = LibraryService()
         self.knowledge = KnowledgeService()
         self.backups = BackupService()
+        self.profiles = ProfileSaveManager()
         self.collections = CollectionIntelligenceService()
         self.database = DatabaseManager()
         self.title_catalog = XboxUnityTitleCatalog()
@@ -456,6 +460,7 @@ class UnityScraperDesktop:
             ("ADD GAMES", self.show_add_games),
             ("DOWNLOADS", self.show_downloads),
             ("BACKUP MANAGER", self.show_backups),
+            ("PROFILES & SAVES", self.show_profiles),
             ("EXTERNAL TOOLS", self.show_external_tools),
             ("COLLECTIONS", self.show_collections),
             ("KNOWLEDGE", self.show_knowledge),
@@ -529,6 +534,16 @@ class UnityScraperDesktop:
         self.external_tools_page = ExternalToolsPage(
             self.root,
             self.content,
+            self._page_header,
+            CONFIG_PATH,
+        )
+
+    def show_profiles(self) -> None:
+        self._clear_content()
+        self.profile_save_page = ProfileSavePage(
+            self.root,
+            self.content,
+            self.profiles,
             self._page_header,
             CONFIG_PATH,
         )
@@ -1214,6 +1229,8 @@ class UnityScraperDesktop:
                 "backup manager.\n"
                 "Licensed under GPL-3.0-only.\n"
                 "Bundled XeXTool 6.3 created by xorloser.\n\n"
+                "Profile/STFS design informed by Dalavin (DJ SkunkieButt)'s "
+                "X360 library and Le Fluffie.\n\n"
                 + describe_storage()
             ),
             justify=tk.LEFT,
@@ -1277,6 +1294,13 @@ class UnityScraperDesktop:
             text=f"XeXTool credit: {XEXTOOL_CREATOR}",
             command=lambda: webbrowser.open(
                 "https://github.com/XboxChef/XexToolGUI"
+            ),
+        ).pack(anchor=tk.W, pady=4)
+        ttk.Button(
+            panel,
+            text=f"Le Fluffie credit: {LE_FLUFFIE_CREATOR}",
+            command=lambda: webbrowser.open(
+                "https://github.com/mtolly/X360"
             ),
         ).pack(anchor=tk.W, pady=4)
         ttk.Button(

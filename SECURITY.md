@@ -34,6 +34,13 @@ filesystem contents in a report.
 - ZIP imports reject traversal paths, symlinks, excessive entries, and
   unreasonable expanded sizes.
 - Package copies use temporary files, verification, and atomic publication.
+- Profile and save identifiers are masked in the GUI by default.
+- Profile scans are read-only. Snapshot restores preserve different existing
+  files and write the restored copy alongside them.
+- Profiles, saves, gamertags, XUIDs, console IDs, and device IDs are not sent
+  to metadata sources.
 - External converters run only when explicitly configured by the user.
 - UnityScraper does not provide game images, firmware, keys, SDK files, or
   copy-protection bypass tools.
+- UnityScraper does not request Xbox Live credentials or store CPU keys,
+  account keys, or profile-signing material.

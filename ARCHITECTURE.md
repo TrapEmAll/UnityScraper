@@ -19,6 +19,7 @@ for CLI and optional REST automation. SQLite is the durable local store.
 - `modern_gui.py` builds the dark navigation shell and core pages.
 - `knowledge_gui.py` renders knowledge search, imports, sources, and conflicts.
 - `backup_gui.py` renders inventory, package, FTP, and converter workflows.
+- `profile_gui.py` renders privacy-aware profile/save inventory and snapshots.
 - `collection_gui.py` renders collection analysis, matching, reports, and
   repair previews.
 - `setup_wizard.py` handles first-run storage setup.
@@ -32,6 +33,8 @@ results to Tk's main loop.
 - `knowledge_service.py` provides search, source status, imports, and details.
 - `backup_service.py` coordinates scans, installs, exports, verification, FTP,
   and audit records.
+- `profile_manager.py` owns Content-tree discovery, STFS ownership inspection,
+  profile/save indexing, verified snapshots, and conflict-safe restore.
 - `knowledge_sync.py` exposes complete source-import workflows to CLI and GUI.
 - `collection_intelligence.py` coordinates snapshots, exact MediaID matching,
   health, preservation matching, repair previews, and offline exports.
@@ -62,6 +65,8 @@ Main schema groups:
 - Knowledge: sources, documents, revisions, entities, names, identifiers,
   facts, citations, relationships, import runs, and conflicts
 - Backups: targets, scans, inventory, and operations
+- Profiles: scan runs, profiles, saves, snapshots, snapshot files, and
+  auditable operations
 
 Schema initialization is idempotent. New migrations should preserve existing
 data and be covered by tests.
@@ -100,6 +105,23 @@ user-selected file or ZIP
 Game payloads are not stored in SQLite. Inventory records contain paths,
 identifiers, sizes, statuses, and notes.
 
+### Profile Snapshot
+
+```text
+user-selected Content tree
+  -> read-only profile and save discovery
+  -> STFS ownership/header inspection
+  -> local inventory and mismatch detection
+  -> selected profile or saves
+  -> .partial verified copies
+  -> atomic snapshot manifest
+  -> conflict-preserving restore
+```
+
+Profile identifiers are masked in the UI by default. Snapshot payloads remain
+on disk under the local application data directory; SQLite stores paths,
+hashes, identifiers, and operation history.
+
 ## Storage
 
 Normal Windows data:
@@ -134,6 +156,8 @@ works in source and PyInstaller one-file builds.
   expanded size.
 - Package and export copies use temporary files and verification.
 - External converters run only through explicit user configuration.
+- Profile scans never modify source content, and restores never overwrite a
+  different existing file.
 
 See [SECURITY.md](SECURITY.md) for reporting and operational guidance.
 

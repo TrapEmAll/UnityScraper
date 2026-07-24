@@ -55,6 +55,24 @@ service exposes. UnityScraper does not silently substitute HTTPS URLs.
 - Captures read-only console inventories and compares PC and console content.
 - Runs a user-selected external ISO converter without bundling converter code.
 
+### Profiles and Save Data
+
+- Discovers profile folders and save packages in extracted Xbox 360 `Content`
+  trees.
+- Reads public STFS ownership, TitleID, package, and display metadata.
+- Associates saves with cached game names and flags profile/TitleID mismatches.
+- Detects duplicate save packages by SHA-256.
+- Masks profile identifiers by default.
+- Creates complete-profile or selected-save snapshots with manifests and
+  verified atomic copies.
+- Restores snapshots without overwriting different existing files.
+- Exports portable JSON preservation manifests.
+
+The profile/package model is informed by Dalavin, also known as DJ
+SkunkieButt, and the GPLv3 X360 library and Le Fluffie source. See
+[PROFILES_AND_SAVES.md](PROFILES_AND_SAVES.md) and
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
 ### External Tools
 
 - Runs Xbox command-line utilities inside the desktop interface.
@@ -149,6 +167,7 @@ Linux source setup:
 | Add Games | Search cached game names, select TitleIDs, or import lists |
 | Downloads | Review and manage download activity |
 | Backup Manager | Scan, install, verify, export, convert, and transfer owned content |
+| Profiles & Saves | Inventory profiles, back up saves, and restore snapshots |
 | External Tools | Run XeXTool and other user-supplied command-line utilities |
 | Collections | Identify storage, compare Title Updates, verify preservation data, and preview repairs |
 | Knowledge | Search sources, facts, citations, imports, and conflicts |
