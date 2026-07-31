@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import asdict
@@ -120,6 +121,8 @@ class ProfileIntelligenceService:
             connection.execute(
                 "DELETE FROM profile_achievements WHERE gpd_file_id=?", (gpd_id,)
             )
+            connection.execute("DELETE FROM profile_gpd_titles WHERE gpd_file_id=?", (gpd_id,))
+            connection.execute("DELETE FROM profile_gpd_images WHERE gpd_file_id=?", (gpd_id,))
             connection.executemany(
                 """
                 INSERT INTO profile_achievements(
@@ -142,6 +145,35 @@ class ProfileIntelligenceService:
                         item.entry_id,
                     )
                     for item in report.achievements
+                ),
+            )
+            connection.executemany(
+                """
+                INSERT INTO profile_gpd_titles(
+                    gpd_file_id, entry_id, titleid, title, achievements_earned,
+                    achievements_possible, gamerscore_earned, gamerscore_possible,
+                    last_played_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    (
+                        gpd_id, item.entry_id, item.title_id, item.title,
+                        item.achievements_earned, item.achievements_possible,
+                        item.gamerscore_earned, item.gamerscore_possible,
+                        item.last_played_at,
+                    )
+                    for item in report.titles
+                ),
+            )
+            connection.executemany(
+                """
+                INSERT INTO profile_gpd_images(
+                    gpd_file_id, entry_id, image_format, size, sha256
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    (gpd_id, item.entry_id, item.image_format, item.size, item.sha256)
+                    for item in report.images
                 ),
             )
         return gpd_id
@@ -211,6 +243,160 @@ class ProfileIntelligenceService:
                 values,
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def list_title_history(self, profile_id: str = "") -> list[dict[str, Any]]:
+        values: tuple[Any, ...] = ()
+        where = ""
+        if profile_id:
+            where = "WHERE g.profile_id=?"
+            values = (profile_id.strip().upper(),)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT t.*, g.profile_id, g.source_path
+                FROM profile_gpd_titles t
+                JOIN profile_gpd_files g ON g.id=t.gpd_file_id
+                {where}
+                ORDER BY t.last_played_at DESC, t.title
+                """,
+                values,
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_images(self, gpd_file_id: int) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM profile_gpd_images WHERE gpd_file_id=? ORDER BY entry_id",
+                (gpd_file_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def profile_dashboard(self, profile_id: str) -> dict[str, Any]:
+        profile = profile_id.strip().upper()
+        if not PROFILE_ID_RE.fullmatch(profile):
+            raise ProfileIntelligenceError("Profile ID must be 16 hexadecimal digits")
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM profile_saves WHERE profile_id=?) save_count,
+                    (SELECT COUNT(DISTINCT titleid) FROM profile_saves
+                     WHERE profile_id=?) save_titles,
+                    (SELECT COALESCE(SUM(size), 0) FROM profile_saves
+                     WHERE profile_id=?) save_bytes,
+                    (SELECT COUNT(*) FROM profile_gpd_files WHERE profile_id=?) gpd_count,
+                    (SELECT COALESCE(SUM(unlocked_count), 0) FROM profile_gpd_files
+                     WHERE profile_id=?) unlocked_count,
+                    (SELECT COALESCE(SUM(achievement_count), 0) FROM profile_gpd_files
+                     WHERE profile_id=?) achievement_count,
+                    (SELECT COALESCE(SUM(gamerscore_earned), 0) FROM profile_gpd_files
+                     WHERE profile_id=?) gamerscore_earned,
+                    (SELECT COALESCE(SUM(gamerscore_possible), 0) FROM profile_gpd_files
+                     WHERE profile_id=?) gamerscore_possible
+                """,
+                (profile,) * 8,
+            ).fetchone()
+            recent = connection.execute(
+                """
+                SELECT titleid, title, last_played_at, gamerscore_earned,
+                       gamerscore_possible FROM profile_gpd_titles t
+                JOIN profile_gpd_files g ON g.id=t.gpd_file_id
+                WHERE g.profile_id=? ORDER BY last_played_at DESC LIMIT 10
+                """,
+                (profile,),
+            ).fetchall()
+        result = dict(row or {})
+        possible = int(result.get("gamerscore_possible") or 0)
+        earned = int(result.get("gamerscore_earned") or 0)
+        result.update(
+            {
+                "profile_id": profile,
+                "completion_percent": round((earned / possible) * 100, 1) if possible else 0.0,
+                "recent_titles": [dict(item) for item in recent],
+            }
+        )
+        return result
+
+    def preview_ownership_migration(
+        self,
+        profile_id: str,
+        source_path: str | Path,
+        *,
+        target_profile_id: str = "",
+        target_device_id: str = "",
+        target_console_id: str = "",
+    ) -> dict[str, Any]:
+        profile = profile_id.strip().upper()
+        target_profile = target_profile_id.strip().upper()
+        if not PROFILE_ID_RE.fullmatch(profile):
+            raise ProfileIntelligenceError("Source profile ID must be 16 hexadecimal digits")
+        if target_profile and not PROFILE_ID_RE.fullmatch(target_profile):
+            raise ProfileIntelligenceError("Target profile ID must be 16 hexadecimal digits")
+        source = Path(source_path).expanduser().resolve()
+        if not source.is_file():
+            raise FileNotFoundError(source)
+        for label, value in (("Device ID", target_device_id), ("Console ID", target_console_id)):
+            if value and (len(value) % 2 or any(ch not in "0123456789abcdefABCDEF" for ch in value)):
+                raise ProfileIntelligenceError(f"{label} must contain complete hexadecimal bytes")
+        changes = {
+            "profile_id": {"from": profile, "to": target_profile or profile},
+            "device_id": {"to": target_device_id.upper()},
+            "console_id": {"to": target_console_id.upper()},
+        }
+        warnings = [
+            "Preview only: no package bytes were changed.",
+            "A signed CON package requires complete STFS rehashing and signing after ownership changes.",
+            "Create and verify a snapshot before using any external resigning tool.",
+        ]
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO profile_migration_previews(
+                    profile_id, source_path, target_profile_id, target_device_id,
+                    target_console_id, created_at, warnings_json, changes_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    profile, str(source), target_profile, target_device_id.upper(),
+                    target_console_id.upper(), utc_now(), json.dumps(warnings),
+                    json.dumps(changes, sort_keys=True),
+                ),
+            )
+            preview_id = int(cursor.lastrowid or 0)
+        return {"preview_id": preview_id, "source_path": str(source),
+                "changes": changes, "warnings": warnings}
+
+    def compare_save_files(self, left_path: str | Path, right_path: str | Path) -> dict[str, Any]:
+        left = Path(left_path).expanduser().resolve()
+        right = Path(right_path).expanduser().resolve()
+        if not left.is_file() or not right.is_file():
+            raise FileNotFoundError("Both comparison paths must be files")
+        left_hash, left_blocks = _hash_blocks(left)
+        right_hash, right_blocks = _hash_blocks(right)
+        changed = [
+            index for index in range(max(len(left_blocks), len(right_blocks)))
+            if (left_blocks[index] if index < len(left_blocks) else None)
+            != (right_blocks[index] if index < len(right_blocks) else None)
+        ]
+        summary = {
+            "left": str(left), "right": str(right),
+            "left_size": left.stat().st_size, "right_size": right.stat().st_size,
+            "left_sha256": left_hash, "right_sha256": right_hash,
+            "identical": left_hash == right_hash,
+            "block_size": 64 * 1024, "changed_blocks": changed,
+        }
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO save_comparison_runs(
+                    left_path, right_path, created_at, identical, summary_json
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (str(left), str(right), utc_now(), int(summary["identical"]),
+                 json.dumps(summary, sort_keys=True)),
+            )
+            summary["comparison_id"] = int(cursor.lastrowid or 0)
+        return summary
 
     def compare_profiles(self, left_profile_id: str, right_profile_id: str) -> dict[str, Any]:
         left = left_profile_id.strip().upper()
@@ -403,3 +589,13 @@ def _comparison_summary(
         "achievements_only_right": sorted(unlocked[right] - unlocked[left]),
         "achievements_shared": len(unlocked[left] & unlocked[right]),
     }
+
+
+def _hash_blocks(path: Path, block_size: int = 64 * 1024) -> tuple[str, list[str]]:
+    digest = hashlib.sha256()
+    blocks: list[str] = []
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(block_size), b""):
+            digest.update(block)
+            blocks.append(hashlib.sha256(block).hexdigest())
+    return digest.hexdigest(), blocks

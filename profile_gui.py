@@ -10,6 +10,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Any, Callable
 
+from gpd_parser import export_gpd_image
 from platform_support import open_path
 from profile_intelligence import ProfileIntelligenceService
 from profile_manager import ProfileSaveManager, mask_identifier
@@ -96,16 +97,19 @@ class ProfileSavePage:
         inventory = ttk.Frame(notebook, padding=10)
         snapshots = ttk.Frame(notebook, padding=10)
         achievements = ttk.Frame(notebook, padding=10)
+        history = ttk.Frame(notebook, padding=10)
         compare = ttk.Frame(notebook, padding=10)
         xenia = ttk.Frame(notebook, padding=10)
         notebook.add(inventory, text="Inventory")
         notebook.add(snapshots, text="Snapshots")
         notebook.add(achievements, text="Achievements")
+        notebook.add(history, text="Played Titles")
         notebook.add(compare, text="Compare")
         notebook.add(xenia, text="Xenia")
         self._build_inventory(inventory)
         self._build_snapshots(snapshots)
         self._build_achievements(achievements)
+        self._build_history(history)
         self._build_compare(compare)
         self._build_xenia(xenia)
 
@@ -381,6 +385,73 @@ class ProfileSavePage:
         )
         self.compare_text.configure(state=tk.DISABLED)
 
+    def _build_history(self, parent: ttk.Frame) -> None:
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(1, weight=1)
+        parent.rowconfigure(3, weight=1)
+        self.history_summary_var = tk.StringVar(
+            value="Import an extracted dashboard GPD to view played-title history."
+        )
+        ttk.Label(parent, textvariable=self.history_summary_var,
+                  style="Subheader.TLabel").grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        self.history_tree = ttk.Treeview(
+            parent,
+            columns=("game", "titleid", "achievements", "score", "last_played"),
+            show="headings",
+        )
+        for column, label, width in (
+            ("game", "Game", 300), ("titleid", "TitleID", 90),
+            ("achievements", "Achievements", 110), ("score", "Gamerscore", 110),
+            ("last_played", "Last Played", 190),
+        ):
+            self.history_tree.heading(column, text=label)
+            self.history_tree.column(column, width=width, anchor=tk.W)
+        self.history_tree.grid(row=1, column=0, sticky="nsew")
+        image_toolbar = ttk.Frame(parent)
+        image_toolbar.grid(row=2, column=0, sticky="ew", pady=(10, 6))
+        ttk.Label(image_toolbar, text="Embedded artwork", style="CardTitle.TLabel").pack(
+            side=tk.LEFT
+        )
+        ttk.Button(
+            image_toolbar, text="Export Selected Image", command=self.export_embedded_image
+        ).pack(side=tk.RIGHT)
+        self.gpd_image_tree = ttk.Treeview(
+            parent, columns=("format", "size", "source"), show="headings", height=5
+        )
+        for column, label, width in (
+            ("format", "Format", 90), ("size", "Size", 90), ("source", "Source GPD", 620)
+        ):
+            self.gpd_image_tree.heading(column, text=label)
+            self.gpd_image_tree.column(column, width=width, anchor=tk.W)
+        self.gpd_image_tree.grid(row=3, column=0, sticky="nsew")
+        self.gpd_images: dict[str, dict[str, Any]] = {}
+
+    def export_embedded_image(self) -> None:
+        selection = self.gpd_image_tree.selection()
+        if not selection:
+            messagebox.showinfo(
+                "Embedded artwork", "Select an image first.", parent=self.root
+            )
+            return
+        row = self.gpd_images[selection[0]]
+        suffix = ".jpg" if row["image_format"] == "jpeg" else f".{row['image_format']}"
+        destination = filedialog.asksaveasfilename(
+            parent=self.root,
+            title="Export embedded artwork",
+            defaultextension=suffix,
+            initialfile=f"gpd-image-{row['entry_id']}{suffix}",
+        )
+        if not destination:
+            return
+        try:
+            exported = export_gpd_image(row["source_path"], int(row["entry_id"]), destination)
+        except Exception as exc:
+            messagebox.showerror("Image export failed", str(exc), parent=self.root)
+            return
+        messagebox.showinfo(
+            "Embedded artwork", f"Exported to {exported}", parent=self.root
+        )
+
     def _build_xenia(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(1, weight=1)
         parent.rowconfigure(3, weight=1)
@@ -598,6 +669,7 @@ class ProfileSavePage:
         self._refresh_profiles()
         self._refresh_snapshots()
         self._refresh_gpd_files()
+        self._refresh_history()
 
     def _refresh_profiles(self) -> None:
         selected = self._selected_profile_id()
@@ -680,6 +752,41 @@ class ProfileSavePage:
         elif self.gpd_tree.get_children():
             self.gpd_tree.selection_set(self.gpd_tree.get_children()[0])
         self._refresh_achievements()
+        self._refresh_history()
+
+    def _refresh_history(self) -> None:
+        if not hasattr(self, "history_tree"):
+            return
+        self.history_tree.delete(*self.history_tree.get_children())
+        rows = self.intelligence.list_title_history(self._selected_profile_id())
+        for row in rows:
+            self.history_tree.insert(
+                "", tk.END,
+                values=(
+                    row.get("title") or "Unknown game", row["titleid"],
+                    f"{row['achievements_earned']} / {row['achievements_possible']}",
+                    f"{row['gamerscore_earned']} / {row['gamerscore_possible']}",
+                    row.get("last_played_at") or "Unknown",
+                ),
+            )
+        self.gpd_image_tree.delete(*self.gpd_image_tree.get_children())
+        self.gpd_images.clear()
+        image_count = 0
+        for gpd in self.gpd_files.values():
+            for image in self.intelligence.list_images(int(gpd["id"])):
+                image_count += 1
+                item_id = f"gpd-image-{gpd['id']}-{image['entry_id']}"
+                image["source_path"] = gpd["source_path"]
+                self.gpd_images[item_id] = image
+                self.gpd_image_tree.insert(
+                    "", tk.END, iid=item_id,
+                    values=(image["image_format"].upper(), _size(image["size"]),
+                            gpd["source_path"]),
+                )
+        self.history_summary_var.set(
+            f"{len(rows)} played titles and {image_count} validated embedded images. "
+            "Source GPD files remain unchanged."
+        )
 
     def _refresh_achievements(self) -> None:
         if not hasattr(self, "achievement_tree"):

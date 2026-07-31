@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 def _now() -> str:
@@ -68,6 +68,7 @@ def ensure_application_schema(connection: sqlite3.Connection) -> int:
         (5, "XboxUnity title catalog", _migration_xboxunity_catalog),
         (6, "profile and save management", _migration_profiles_and_saves),
         (7, "profile intelligence and knowledge controls", _migration_roadmap),
+        (8, "community roadmap workspaces", _migration_community_roadmap),
     )
     for version, name, migration in migrations:
         if version in applied:
@@ -499,3 +500,205 @@ def _migration_roadmap(connection: sqlite3.Connection) -> None:
             ADD COLUMN verify_remote_hash INTEGER NOT NULL DEFAULT 0
             """
         )
+
+
+def _migration_community_roadmap(connection: sqlite3.Connection) -> None:
+    """Add durable records for the community-facing roadmap workspaces."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS structured_knowledge_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            document_id INTEGER NOT NULL,
+            source_id INTEGER NOT NULL,
+            record_type TEXT NOT NULL,
+            canonical_name TEXT NOT NULL,
+            normalized_name TEXT NOT NULL,
+            properties_json TEXT NOT NULL,
+            confidence REAL NOT NULL DEFAULT 0.75,
+            extracted_at TEXT NOT NULL,
+            UNIQUE(document_id, record_type, normalized_name),
+            FOREIGN KEY(document_id) REFERENCES source_documents(id),
+            FOREIGN KEY(source_id) REFERENCES knowledge_sources(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_structured_knowledge_lookup
+            ON structured_knowledge_records(record_type, normalized_name);
+
+        CREATE TABLE IF NOT EXISTS console_sync_plans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            dashboard_slug TEXT NOT NULL,
+            local_root TEXT NOT NULL,
+            remote_root TEXT NOT NULL,
+            snapshot_id INTEGER,
+            created_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'preview',
+            summary_json TEXT NOT NULL,
+            FOREIGN KEY(snapshot_id) REFERENCES console_inventory_snapshots(id)
+        );
+        CREATE TABLE IF NOT EXISTS console_sync_actions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plan_id INTEGER NOT NULL,
+            action TEXT NOT NULL,
+            local_path TEXT,
+            remote_path TEXT,
+            size INTEGER NOT NULL DEFAULT 0,
+            reason TEXT NOT NULL,
+            selected INTEGER NOT NULL DEFAULT 1,
+            status TEXT NOT NULL DEFAULT 'preview',
+            FOREIGN KEY(plan_id) REFERENCES console_sync_plans(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS profile_migration_previews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            profile_id TEXT NOT NULL,
+            source_path TEXT NOT NULL,
+            target_profile_id TEXT,
+            target_device_id TEXT,
+            target_console_id TEXT,
+            created_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'preview',
+            warnings_json TEXT NOT NULL,
+            changes_json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS profile_gpd_titles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            gpd_file_id INTEGER NOT NULL,
+            entry_id INTEGER NOT NULL,
+            titleid TEXT NOT NULL,
+            title TEXT,
+            achievements_earned INTEGER NOT NULL DEFAULT 0,
+            achievements_possible INTEGER NOT NULL DEFAULT 0,
+            gamerscore_earned INTEGER NOT NULL DEFAULT 0,
+            gamerscore_possible INTEGER NOT NULL DEFAULT 0,
+            last_played_at TEXT,
+            UNIQUE(gpd_file_id, entry_id),
+            FOREIGN KEY(gpd_file_id) REFERENCES profile_gpd_files(id)
+        );
+        CREATE TABLE IF NOT EXISTS profile_gpd_images (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            gpd_file_id INTEGER NOT NULL,
+            entry_id INTEGER NOT NULL,
+            image_format TEXT NOT NULL,
+            size INTEGER NOT NULL,
+            sha256 TEXT NOT NULL,
+            UNIQUE(gpd_file_id, entry_id),
+            FOREIGN KEY(gpd_file_id) REFERENCES profile_gpd_files(id)
+        );
+        CREATE TABLE IF NOT EXISTS save_comparison_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            left_path TEXT NOT NULL,
+            right_path TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            identical INTEGER NOT NULL,
+            summary_json TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS artwork_preferences (
+            titleid TEXT PRIMARY KEY,
+            source_path TEXT NOT NULL,
+            artwork_type TEXT NOT NULL DEFAULT 'cover',
+            region TEXT,
+            language TEXT,
+            width INTEGER,
+            height INTEGER,
+            sha256 TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS artwork_export_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            destination TEXT NOT NULL,
+            preset TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            exported_count INTEGER NOT NULL DEFAULT 0,
+            skipped_count INTEGER NOT NULL DEFAULT 0,
+            manifest_path TEXT,
+            status TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS disc_set_audits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_id INTEGER,
+            titleid TEXT NOT NULL,
+            media_id TEXT,
+            expected_count INTEGER NOT NULL,
+            present_json TEXT NOT NULL,
+            missing_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            audited_at TEXT NOT NULL,
+            FOREIGN KEY(snapshot_id) REFERENCES collection_snapshots(id)
+        );
+        CREATE TABLE IF NOT EXISTS dedup_plans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            root TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            duplicate_groups INTEGER NOT NULL DEFAULT 0,
+            reclaimable_bytes INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'preview'
+        );
+        CREATE TABLE IF NOT EXISTS dedup_actions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plan_id INTEGER NOT NULL,
+            sha256 TEXT NOT NULL,
+            keeper_path TEXT NOT NULL,
+            duplicate_path TEXT NOT NULL,
+            size INTEGER NOT NULL,
+            action TEXT NOT NULL DEFAULT 'review',
+            status TEXT NOT NULL DEFAULT 'preview',
+            FOREIGN KEY(plan_id) REFERENCES dedup_plans(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS storage_source_audits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_path TEXT NOT NULL,
+            source_kind TEXT NOT NULL,
+            filesystem TEXT,
+            access_mode TEXT NOT NULL DEFAULT 'read-only',
+            detected_at TEXT NOT NULL,
+            status TEXT NOT NULL,
+            details_json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS original_xbox_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            titleid TEXT,
+            title_name TEXT NOT NULL,
+            xbe_path TEXT NOT NULL UNIQUE,
+            region_flags TEXT,
+            version TEXT,
+            compatibility TEXT,
+            metadata_json TEXT NOT NULL,
+            scanned_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS plugin_states (
+            plugin_id TEXT PRIMARY KEY,
+            enabled INTEGER NOT NULL DEFAULT 0,
+            trusted_sha256 TEXT,
+            permissions_json TEXT NOT NULL DEFAULT '[]',
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS recovery_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL,
+            source TEXT NOT NULL,
+            status TEXT NOT NULL,
+            recoverable INTEGER NOT NULL DEFAULT 1,
+            details_json TEXT NOT NULL,
+            detected_at TEXT NOT NULL,
+            resolved_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS dashboard_compatibility_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            dashboard_slug TEXT NOT NULL,
+            host_label TEXT,
+            tested_at TEXT NOT NULL,
+            feature TEXT NOT NULL,
+            supported INTEGER NOT NULL,
+            details TEXT,
+            UNIQUE(dashboard_slug, host_label, feature)
+        );
+        CREATE TABLE IF NOT EXISTS accessibility_preferences (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        """
+    )

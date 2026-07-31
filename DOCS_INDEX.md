@@ -20,6 +20,10 @@
 - [REST API](API.md) - authentication, endpoints, configuration, and safety
 - [Linux Support](LINUX.md) - installation, XDG storage, desktop integration,
   uninstallation, and troubleshooting
+- [macOS Preview](MACOS.md) - Apple Silicon bundle, source setup, checksums,
+  and signing limitations
+- [Community Hub](COMMUNITY_HUB.md) - unified search, profile/package tools,
+  guided console plans, preservation, plugins, recovery, and safety boundaries
 - [Project Status](PROJECT_STATUS.md) - completed work, boundaries, and roadmap
 - [Changelog](CHANGELOG.md) - release history
 
@@ -52,4 +56,10 @@ Linux packaging:
 
 ```bash
 ./build_linux.sh
+```
+
+macOS packaging:
+
+```bash
+./build_macos.sh
 ```

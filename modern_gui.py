@@ -36,6 +36,8 @@ from app_version import DISPLAY_VERSION
 from backup_gui import BackupPage
 from collection_gui import CollectionPage
 from collection_intelligence import CollectionIntelligenceService
+from community_gui import CommunityHubPage
+from community_services import AccessibilityService
 from backup_service import BackupService
 from database import DatabaseManager
 from database_migrations import create_database_backup, restore_database_backup
@@ -333,6 +335,8 @@ class UnityScraperDesktop:
         self.collections = CollectionIntelligenceService()
         self.database = DatabaseManager()
         self.title_catalog = XboxUnityTitleCatalog()
+        self.accessibility = AccessibilityService()
+        self.accessibility_preferences = self.accessibility.get()
         self.current_game: str | None = None
         self._catalog_syncing = False
         self._catalog_events: queue.Queue[tuple[str, Any]] = queue.Queue()
@@ -343,6 +347,8 @@ class UnityScraperDesktop:
         self.root.title(f"UnityScraper {APP_VERSION}")
         config = self._read_config()
         scale = max(0.8, min(2.0, float(config.get("ui_scale", 1.0))))
+        if self.accessibility_preferences["large_text"]:
+            scale = min(2.0, scale + 0.25)
         self.root.tk.call("tk", "scaling", scale)
         self.root.geometry("1220x780")
         self.root.minsize(980, 640)
@@ -434,11 +440,38 @@ class UnityScraperDesktop:
                   foreground=[("selected", ACCENT), ("active", TEXT)])
         style.configure("Vertical.TScrollbar", background="#111a13", troughcolor="#050806",
                         arrowcolor=ACCENT, bordercolor=BORDER)
+
+        if self.accessibility_preferences["high_contrast"]:
+            contrast_bg = "#000000"
+            contrast_text = "#ffffff"
+            contrast_accent = "#b6ff00"
+            self.root.configure(background=contrast_bg)
+            style.configure(".", background=contrast_bg, foreground=contrast_text,
+                            fieldbackground=contrast_bg, bordercolor=contrast_text,
+                            troughcolor=contrast_bg, selectbackground=contrast_accent,
+                            selectforeground=contrast_bg)
+            for name in ("TFrame", "Content.TFrame", "TLabel", "TLabelframe",
+                         "TLabelframe.Label", "TNotebook"):
+                style.configure(name, background=contrast_bg, foreground=contrast_text)
+            style.configure("Sidebar.TFrame", background=contrast_bg)
+            style.configure("Brand.TLabel", background=contrast_bg, foreground=contrast_text)
+            style.configure("AccentBrand.TLabel", background=contrast_bg,
+                            foreground=contrast_accent)
+            style.configure("TButton", background=contrast_bg, foreground=contrast_text,
+                            bordercolor=contrast_text)
+            style.configure("Nav.TButton", background=contrast_bg, foreground=contrast_text,
+                            bordercolor=contrast_text)
+            style.configure("Treeview", background=contrast_bg, fieldbackground=contrast_bg,
+                            foreground=contrast_text, bordercolor=contrast_text)
+            style.configure("Treeview.Heading", background=contrast_bg,
+                            foreground=contrast_accent, bordercolor=contrast_text)
+            style.configure("TNotebook.Tab", background=contrast_bg, foreground=contrast_text)
+
     def _build_shell(self) -> None:
         self._wallpaper_source: Image.Image | None = None
         self._wallpaper_photo: ImageTk.PhotoImage | None = None
         wallpaper = resource_path("assets", "backgrounds", "unityscraper_full_background.png")
-        if wallpaper.exists():
+        if wallpaper.exists() and not self.accessibility_preferences["high_contrast"]:
             try:
                 self._wallpaper_source = Image.open(wallpaper).convert("RGB")
             except OSError:
@@ -467,12 +500,17 @@ class UnityScraperDesktop:
             ("EXTERNAL TOOLS", self.show_external_tools),
             ("COLLECTIONS", self.show_collections),
             ("KNOWLEDGE", self.show_knowledge),
+            ("COMMUNITY HUB", self.show_community_hub),
             ("ARCHIVE HEALTH", self.show_health),
             ("SETTINGS", self.show_settings),
             ("HELP & ABOUT", self.show_about),
         )
-        for label, callback in pages:
-            ttk.Button(nav, text=label, command=callback, style="Nav.TButton", width=22).pack(
+        for index, (label, callback) in enumerate(pages, start=1):
+            shortcut = navigation_shortcut(index)
+            display_label = label
+            if shortcut and self.accessibility_preferences["keyboard_hints"]:
+                display_label = f"{label}    Alt+{shortcut}"
+            ttk.Button(nav, text=display_label, command=callback, style="Nav.TButton", width=22).pack(
                 fill=tk.X, pady=3
             )
 
@@ -495,6 +533,7 @@ class UnityScraperDesktop:
                     lambda _event, action=callback: action(),
                 )
         self.root.bind("<Control-l>", lambda _event: self.show_library())
+        self.root.bind("<Control-k>", lambda _event: self.show_community_hub(focus_search=True))
         self.show_library()
 
     def _resize_shell(self, _event: tk.Event[Any] | None) -> None:
@@ -1057,6 +1096,14 @@ class UnityScraperDesktop:
             self.content,
             self.knowledge,
         )
+
+    def show_community_hub(self, focus_search: bool = False) -> None:
+        self._clear_content()
+        self.community_hub_page = CommunityHubPage(
+            self.root, self.content, self._page_header
+        )
+        if focus_search:
+            self.root.after_idle(self.community_hub_page.focus_search)
 
     def show_health(self) -> None:
         self._clear_content()

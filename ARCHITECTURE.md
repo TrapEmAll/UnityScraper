@@ -22,6 +22,8 @@ for CLI and optional REST automation. SQLite is the durable local store.
 - `profile_gui.py` renders privacy-aware profile/save inventory and snapshots.
 - `collection_gui.py` renders collection analysis, matching, reports, and
   repair previews.
+- `community_gui.py` renders unified search and the cross-domain community
+  workspaces.
 - `setup_wizard.py` handles first-run storage setup.
 
 GUI operations that can block are dispatched to background threads and return
@@ -42,6 +44,12 @@ results to Tk's main loop.
   snapshots, and PC/console comparisons.
 - `database_migrations.py` applies additive schema versions and provides
   consistent SQLite backup/restore helpers.
+- `community_services.py` coordinates guided sync plans, package workspaces,
+  artwork, disc and dedup audits, storage, plugins, recovery, compatibility,
+  and accessibility.
+- `unified_search.py` ranks local results across the application domains.
+- `structured_knowledge.py` extracts typed records from cached source documents
+  while retaining document and source relationships.
 
 ### Domain and Adapters
 
@@ -69,6 +77,9 @@ Main schema groups:
 - Profiles: scan runs, profiles, saves, snapshots, snapshot files, GPD
   inventories, achievements, comparisons, Xenia migration runs, and auditable
   operations
+- Community: structured records, guided sync plans, ownership previews, played
+  titles and images, save comparisons, artwork exports, disc and dedup audits,
+  storage audits, plugin state, recovery, compatibility, and accessibility
 
 Schema initialization is idempotent. New migrations should preserve existing
 data and be covered by tests.
@@ -183,5 +194,6 @@ See [SECURITY.md](SECURITY.md) for reporting and operational guidance.
 
 `UnityScraper.spec` is the canonical cross-platform PyInstaller definition.
 Assets and modules loaded indirectly by the GUI are listed explicitly. GitHub
-Actions validates Windows and Linux one-file builds on pull requests. Version
-tags publish a Windows ZIP and Linux tarball with separate SHA-256 files.
+Actions validates Windows and Linux one-file builds plus an unsigned macOS
+Apple Silicon application bundle. Version tags publish platform archives with
+separate SHA-256 files.

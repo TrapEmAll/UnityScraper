@@ -240,6 +240,26 @@ TRANSLATIONS['pt'] = {
 }
 
 
+def _repair_legacy_text(value: str) -> str:
+    """Repair translations that were historically saved with the wrong encoding."""
+    if not any(marker in value for marker in ("Ã", "Â", "â", "ã", "ç", "é")):
+        return value
+    for encoding in ("cp1252", "latin-1"):
+        try:
+            repaired = value.encode(encoding).decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            continue
+        if repaired != value:
+            return repaired
+    return value
+
+
+for _language, _strings in TRANSLATIONS.items():
+    TRANSLATIONS[_language] = {
+        key: _repair_legacy_text(value) for key, value in _strings.items()
+    }
+
+
 class Translator:
     """Language translator for GUI"""
     

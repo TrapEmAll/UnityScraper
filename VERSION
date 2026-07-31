@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0b1",
+  "version": "1.1.0b1",
   "name": "Unified Xbox 360 Collection and Preservation Manager",
   "changes": [
     "Unified Xbox 360 knowledge browser",
@@ -16,7 +16,11 @@
     "Redump and No-Intro local-file hash matching",
     "Offline HTML reports, manifests, provenance, and metadata overrides",
     "Versioned migrations, database backups, queue recovery, and plugin API v1",
-    "Platform-aware verified updates, SBOMs, and build attestations"
+    "Platform-aware verified updates, SBOMs, and build attestations",
+    "Unified Community Hub across games, knowledge, profiles, preservation, and recovery",
+    "Guided console sync plans and recoverable duplicate cleanup",
+    "Played-title history and validated embedded GPD image export",
+    "Windows, Linux, and unsigned Apple Silicon macOS build paths"
   ],
   "download_url": "https://github.com/TrapEmAll/UnityScraper/releases",
   "release_date": "2026-07-23"

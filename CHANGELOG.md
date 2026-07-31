@@ -7,6 +7,26 @@ Notable changes to UnityScraper are documented here. The project follows
 
 ### Added
 
+- Community Hub with unified local search across games, source knowledge,
+  profiles, saves, achievements, files, and structured records.
+- Additive schema migration 8 for structured knowledge, guided console plans,
+  ownership previews, GPD title/image records, save comparisons, artwork,
+  disc/dedup audits, storage and original Xbox records, plugins, recovery,
+  dashboard compatibility, and accessibility.
+- Structured extraction of hardware, drive, dashboard, exploit, error, format,
+  repair, and tool records from cached source documents with provenance.
+- Confirmed sync-plan queueing through the existing persistent transfer engine.
+- Read-only package workspaces, profile dashboards, ownership previews,
+  block-level save comparison, played-title history, and validated GPD image
+  export.
+- Artwork export presets, multi-disc audits, hash-based duplicate previews, and
+  recoverable duplicate quarantine/hardlink actions.
+- Read-only FATX audits, original Xbox discovery, bounded plugin installation,
+  recovery actions, and dashboard FTP capability probes.
+- High-contrast, large-text, reduced-motion, and keyboard-hint preferences.
+- Unsigned macOS Apple Silicon application packaging, checksums, CI validation,
+  and documentation.
+- Runtime repair for historically misencoded translation resources.
 - Read-only XDBF/GPD inspection with bounded entry parsing, achievement state,
   gamerscore summaries, extracted-folder discovery, and local inventory.
 - Profile comparison for save hashes and imported achievement state.
@@ -63,6 +83,8 @@ Notable changes to UnityScraper are documented here. The project follows
 
 ### Changed
 
+- Version advanced to `1.1.0-beta.1`.
+- CI now runs the Python suite on Windows, Linux, and macOS.
 - Cached XboxUnity titles now resolve immediately in library lists and details,
   enrich matching rows page by page, and recover after interrupted refreshes.
 - Library rows now show `Unknown game` instead of duplicating the TitleID when
@@ -70,7 +92,6 @@ Notable changes to UnityScraper are documented here. The project follows
 - Cached XboxUnity names enrich only blank, unknown, or TitleID-shaped values
   and never replace an existing preferred title.
 - Library queries now close SQLite handles immediately after use.
-- Version advanced to `1.0.0-beta.1`.
 - Download queues now use atomic writes and recover interrupted items.
 - Update checks select a platform artifact and require its SHA-256 sidecar
   before staging it.

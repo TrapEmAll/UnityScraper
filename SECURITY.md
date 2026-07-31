@@ -39,6 +39,15 @@ filesystem contents in a report.
   files and write the restored copy alongside them.
 - GPD parsing validates bounded entry tables and file offsets and never writes
   achievement, setting, sync, or image records.
+- GPD image export validates the selected bounded payload and publishes through
+  a temporary file without changing the source GPD.
+- Duplicate actions revalidate both hashes and retain the removed path in a
+  local quarantine; hardlinks are created only after quarantine succeeds.
+- FATX image support is detection-only. Raw image and device writes are not
+  available.
+- Package ownership changes and signed-package rebuilds remain preview-only.
+- Plugin ZIPs have entry and expanded-size limits, reject traversal paths, and
+  are installed disabled for explicit review.
 - Xenia migrations require a preview and verified snapshot, publish through
   partial files, and never overwrite different destination data.
 - Optional remote hashes use read-only FTP commands and fail closed when the

@@ -109,6 +109,23 @@ checksums, platform notes, and safety guidance.
 - Exports preservation manifests, offline HTML reports, and fact provenance.
 - Keeps local metadata overrides separate from source-attributed knowledge.
 
+### Community Hub
+
+- Searches games, knowledge, profiles, saves, achievements, files, and tools
+  together from the local database.
+- Extracts structured hardware, dashboard, exploit, error, format, repair, and
+  tool records from cached source articles while retaining provenance.
+- Builds console sync previews and queues confirmed uploads through the durable,
+  resumable transfer engine.
+- Adds profile dashboards, read-only package workspaces, ownership previews,
+  save comparison, played-title history, and validated GPD image export.
+- Manages preferred artwork, multi-disc audits, recoverable duplicate cleanup,
+  read-only FATX inspection, original Xbox discovery, plugins, and recovery.
+- Stores high-contrast, large-text, reduced-motion, and keyboard-hint settings.
+
+See [COMMUNITY_HUB.md](COMMUNITY_HUB.md) for all twenty capabilities and their
+safety boundaries.
+
 ## Install
 
 ### Windows Release
@@ -135,6 +152,12 @@ The user-level installer adds UnityScraper to the desktop application menu and
 creates `~/.local/bin/unityscraper`. It does not require root access. See
 [LINUX.md](LINUX.md) for supported distributions, XDG paths, source setup,
 uninstallation, and troubleshooting.
+
+### macOS Preview
+
+CI produces an unsigned Apple Silicon `.app` archive and SHA-256 checksum. It
+is currently a preview artifact and is not notarized. See [MACOS.md](MACOS.md)
+for installation, source setup, and known limitations.
 
 ### Run From Source
 
@@ -180,6 +203,7 @@ Linux source setup:
 | External Tools | Run XeXTool and other user-supplied command-line utilities |
 | Collections | Identify storage, compare Title Updates, verify preservation data, and preview repairs |
 | Knowledge | Search sources, facts, citations, imports, and conflicts |
+| Community Hub | Unified search, console plans, profiles, preservation, plugins, recovery, and compatibility |
 | Archive Health | Find missing or inconsistent downloaded files |
 | Settings | Configure storage and scraper behavior |
 | Help & About | Version, diagnostics, storage, and advanced tools |
@@ -353,11 +377,19 @@ Build the Linux release bundle on Linux:
 The output is `dist/UnityScraper-Linux-<architecture>.tar.gz` with a matching
 SHA-256 file.
 
+Build the macOS application bundle on macOS:
+
+```bash
+./build_macos.sh
+```
+
 ## Documentation
 
 - [Documentation index](DOCS_INDEX.md)
 - [Architecture](ARCHITECTURE.md)
 - [Linux support](LINUX.md)
+- [macOS preview](MACOS.md)
+- [Community Hub](COMMUNITY_HUB.md)
 - [Knowledge sources and licensing](KNOWLEDGE_SOURCES.md)
 - [Backup manager](BACKUP_MANAGER.md)
 - [Collection intelligence](COLLECTION_INTELLIGENCE.md)
