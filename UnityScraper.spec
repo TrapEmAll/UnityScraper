@@ -1,9 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import sys
+from pathlib import Path
 
 
 icon = 'assets/UnityScraper.ico' if sys.platform == 'win32' else None
+tk_datas = []
+if sys.platform == 'win32':
+    tcl_root = Path(sys.base_prefix) / 'tcl' / 'tcl8.6'
+    tk_root = Path(sys.base_prefix) / 'tcl' / 'tk8.6'
+    if tcl_root.is_dir():
+        tk_datas.append((str(tcl_root), '_tcl_data'))
+    if tk_root.is_dir():
+        tk_datas.append((str(tk_root), '_tk_data'))
 
 a = Analysis(
     ['desktop_app.py'],
@@ -14,13 +23,15 @@ a = Analysis(
         ('VERSION', '.'),
         ('THIRD_PARTY_NOTICES.md', '.'),
         ('assets', 'assets'),
-    ],
+    ] + tk_datas,
     hiddenimports=[
         'backup_gui',
         'backup_manager',
         'backup_service',
         'collection_gui',
         'collection_intelligence',
+        'community_gui',
+        'community_services',
         'console_sync',
         'consolemods_adapters',
         'database_migrations',
@@ -29,6 +40,8 @@ a = Analysis(
         'knowledge_service',
         'knowledge_scheduler',
         'knowledge_sync',
+        'structured_knowledge',
+        'unified_search',
         'plugins',
         'gpd_parser',
         'profile_gui',

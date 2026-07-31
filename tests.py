@@ -64,6 +64,12 @@ from profile_manager import ProfileSaveManager, find_content_root, mask_identifi
 class TestPlatformSupport(unittest.TestCase):
     """Test cross-platform storage and desktop integration."""
 
+    def test_legacy_translations_are_repaired_at_load_time(self):
+        from i18n import TRANSLATIONS
+
+        self.assertEqual(TRANSLATIONS["es"]["settings"], "Configuraci\u00f3n")
+        self.assertEqual(TRANSLATIONS["ja"]["browse"], "\u53c2\u7167")
+
     def test_linux_uses_xdg_directories(self):
         home = Path("/home/tester")
         paths = resolve_storage_paths(
@@ -82,6 +88,17 @@ class TestPlatformSupport(unittest.TestCase):
         self.assertEqual(paths.config, Path("/xdg/config/unityscraper"))
         self.assertEqual(paths.cache, Path("/xdg/cache/unityscraper"))
         self.assertEqual(paths.logs, Path("/xdg/state/unityscraper/logs"))
+
+    def test_macos_uses_native_user_directories(self):
+        home = Path("/Users/tester")
+        paths = resolve_storage_paths(
+            os_name="posix", platform_name="darwin", environ={}, home=home
+        )
+        self.assertEqual(
+            paths.base, home / "Library" / "Application Support" / "UnityScraper"
+        )
+        self.assertEqual(paths.cache, home / "Library" / "Caches" / "UnityScraper")
+        self.assertEqual(paths.logs, home / "Library" / "Logs" / "UnityScraper")
 
     def test_linux_xdg_defaults_follow_home(self):
         home = Path("/home/tester")
@@ -1631,7 +1648,7 @@ class TestUnifiedV1Foundation(unittest.TestCase):
             versions = connection.execute(
                 "SELECT version FROM app_schema_migrations ORDER BY version"
             ).fetchall()
-        self.assertEqual([row[0] for row in versions], [1, 2, 3, 4, 5, 6, 7])
+        self.assertEqual([row[0] for row in versions], [1, 2, 3, 4, 5, 6, 7, 8])
         self.assertIn("collection_snapshots", tables)
         self.assertIn("preservation_matches", tables)
         self.assertIn("console_transfer_jobs", tables)
@@ -1737,6 +1754,217 @@ class TestUnifiedV1Foundation(unittest.TestCase):
         self.assertEqual(selected["name"], "UnityScraper-Windows-x64.zip")
 
 
+class TestCommunityRoadmap(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = Path(tempfile.mkdtemp())
+        self.db_path = self.temp_dir / "community.db"
+        self.database = DatabaseManager(str(self.db_path))
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir)
+
+    def test_unified_search_spans_games_profiles_and_achievements(self):
+        import sqlite3
+        from contextlib import closing
+        from unified_search import UnifiedSearchService
+
+        self.database.add_titleid("53510804", "Hitman: Absolution", "Square Enix")
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            connection.execute(
+                """INSERT INTO xbox_profiles(profile_id, gamertag, source_path,
+                   profile_kind, package_status, first_seen_at, last_seen_at)
+                   VALUES ('E000000000000001', 'Agent47', 'profile', 'retail',
+                   'header-valid', 'now', 'now')"""
+            )
+            connection.commit()
+        service = UnifiedSearchService(self.db_path)
+        self.assertEqual(service.search("Hitman")[0]["identifier"], "53510804")
+        self.assertEqual(service.search("Agent47")[0]["category"], "profile")
+
+    def test_structured_knowledge_extracts_cached_hardware_article(self):
+        import sqlite3
+        from contextlib import closing
+        from structured_knowledge import StructuredKnowledgeService
+
+        cache = self.temp_dir / "jasper.html"
+        cache.write_text(
+            "<html><h1>Jasper Motherboard</h1><table>"
+            "<tr><th>CPU</th><td>65 nm</td></tr>"
+            "<tr><th>NAND</th><td>16 MB</td></tr></table></html>",
+            encoding="utf-8",
+        )
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            source = connection.execute(
+                """INSERT INTO knowledge_sources(slug, name)
+                   VALUES ('test-source', 'Test Source')"""
+            )
+            source_id = source.lastrowid
+            connection.execute(
+                """INSERT INTO source_documents(source_id, url, title, cache_path)
+                   VALUES (?, 'https://example.test/jasper', 'Jasper Motherboard', ?)""",
+                (source_id, str(cache)),
+            )
+            connection.commit()
+        service = StructuredKnowledgeService(self.db_path)
+        self.assertEqual(service.extract_cached_documents()["extracted"], 1)
+        record = service.list_records()[0]
+        self.assertEqual(record["record_type"], "motherboard")
+        self.assertEqual(record["properties"]["cpu"], "65 nm")
+
+    def test_gpd_title_history_and_safe_image_metadata(self):
+        import struct
+        from gpd_parser import parse_gpd_bytes
+
+        title = bytearray(0x28)
+        struct.pack_into(">IIIII", title, 0, 0x53510804, 50, 25, 1000, 500)
+        title.extend("Hitman: Absolution".encode("utf-16-be") + b"\0\0")
+        image = b"\x89PNG\r\n\x1a\n" + b"image payload"
+        header = struct.pack(">4sIIIII", b"XDBF", 1, 2, 2, 0, 0)
+        entries = (
+            struct.pack(">Hqii", 4, 0x53510804, 0, len(title))
+            + struct.pack(">Hqii", 2, 42, len(title), len(image))
+        )
+        report = parse_gpd_bytes(header + entries + title + image)
+        self.assertEqual(report.titles[0].title_id, "53510804")
+        self.assertEqual(report.titles[0].gamerscore_earned, 500)
+        self.assertEqual(report.images[0].image_format, "png")
+
+    def test_console_sync_plan_can_queue_revalidated_uploads(self):
+        import sqlite3
+        from contextlib import closing
+        from community_services import ConsolePlanService
+
+        local = self.temp_dir / "content"
+        game = local / "53510804" / "00000001" / "save.bin"
+        game.parent.mkdir(parents=True)
+        game.write_bytes(b"new save")
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            snapshot = connection.execute(
+                """INSERT INTO console_inventory_snapshots(root, captured_at, status)
+                   VALUES ('/Hdd1/Content/0000000000000000', 'now', 'completed')"""
+            )
+            connection.execute(
+                """INSERT INTO console_inventory_items(snapshot_id, remote_path, size)
+                   VALUES (?, '/Hdd1/Content/0000000000000000/old.bin', 3)""",
+                (snapshot.lastrowid,),
+            )
+            connection.commit()
+            snapshot_id = snapshot.lastrowid
+        service = ConsolePlanService(self.db_path)
+        plan = service.create_plan(local, snapshot_id)
+        self.assertEqual(plan["summary"]["uploads"], 1)
+        self.assertTrue(any(item["action"] == "review_remote" for item in plan["actions"]))
+        queued = service.queue_uploads(plan["plan_id"])
+        self.assertEqual(len(queued["queued_job_ids"]), 1)
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            status = connection.execute(
+                "SELECT status FROM console_transfer_jobs WHERE id=?",
+                (queued["queued_job_ids"][0],),
+            ).fetchone()[0]
+        self.assertEqual(status, "queued")
+
+    def test_artwork_disc_dedup_and_storage_plans(self):
+        import sqlite3
+        from PIL import Image
+        from community_services import ArtworkService, PreservationPlanningService, StorageAndXboxService
+
+        artwork = self.temp_dir / "cover.png"
+        Image.new("RGB", (64, 96), "green").save(artwork)
+        art = ArtworkService(self.db_path)
+        art.set_preference("53510804", artwork)
+        exported = art.export(self.temp_dir / "art-export")
+        self.assertEqual(exported["exported"], 1)
+
+        duplicates = self.temp_dir / "duplicates"
+        duplicates.mkdir()
+        (duplicates / "a.bin").write_bytes(b"same")
+        (duplicates / "b.bin").write_bytes(b"same")
+        plan = PreservationPlanningService(self.db_path).create_dedup_plan(duplicates)
+        self.assertEqual(plan["groups"], 1)
+        self.assertEqual((duplicates / "a.bin").read_bytes(), b"same")
+        from contextlib import closing
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            action_id = connection.execute(
+                "SELECT id FROM dedup_actions WHERE plan_id=?", (plan["plan_id"],)
+            ).fetchone()[0]
+        applied = PreservationPlanningService(self.db_path).apply_dedup_action(action_id)
+        self.assertTrue(Path(applied["quarantine"]).is_file())
+        self.assertFalse(Path(applied["duplicate"]).exists())
+
+        fatx = self.temp_dir / "drive.img"
+        fatx.write_bytes(b"XTAF" + bytes(64))
+        audit = StorageAndXboxService(self.db_path).audit_storage(fatx)
+        self.assertEqual(audit["filesystem"], "FATX")
+        self.assertEqual(audit["access_mode"], "read-only")
+
+    def test_plugin_recovery_and_accessibility_controls(self):
+        from community_services import AccessibilityService, PluginControlService, RecoveryService
+
+        plugin = self.temp_dir / "plugins" / "sample"
+        plugin.mkdir(parents=True)
+        (plugin / "plugin.py").write_text("value = 1\n", encoding="utf-8")
+        (plugin / "plugin.json").write_text(json.dumps({
+            "id": "sample", "name": "Sample", "version": "1.0",
+            "api_version": 1, "entrypoint": "plugin.py", "permissions": ["metadata"],
+        }), encoding="utf-8")
+        control = PluginControlService(self.db_path)
+        discovered = control.discover(plugin.parent)
+        self.assertEqual(discovered[0]["id"], "sample")
+        control.set_state("sample", True, plugin / "plugin.py", ["metadata"])
+        self.assertTrue(control.discover(plugin.parent)[0]["trusted"])
+
+        partial = self.temp_dir / "download.partial"
+        partial.write_bytes(b"partial")
+        events = RecoveryService(self.db_path).scan([self.temp_dir])
+        partial_event = next(item for item in events if item["event_type"] == "partial_file")
+        recovered = RecoveryService(self.db_path).recover(partial_event["id"])
+        self.assertIn("quarantined", recovered["action"])
+        self.assertFalse(partial.exists())
+
+        access = AccessibilityService(self.db_path)
+        access.set("large_text", True)
+        access.set("high_contrast", True)
+        access.set("reduced_motion", True)
+        self.assertTrue(access.get()["large_text"])
+        self.assertTrue(access.get()["high_contrast"])
+        self.assertTrue(access.get()["reduced_motion"])
+
+    def test_package_workspace_is_read_only_and_profile_tools_are_audited(self):
+        from community_services import PackageWorkspaceService
+        from profile_intelligence import ProfileIntelligenceService
+
+        package = self.temp_dir / "save.bin"
+        header = bytearray(0x1791)
+        header[:4] = b"CON "
+        header[0x344:0x348] = (1).to_bytes(4, "big")
+        header[0x354:0x358] = bytes.fromhex("12345678")
+        header[0x360:0x364] = bytes.fromhex("53510804")
+        header[0x371:0x379] = bytes.fromhex("E000000000000001")
+        header[0x3FD:0x411] = bytes.fromhex("11" * 20)
+        title = "Hitman: Absolution".encode("utf-16-be")
+        header[0x411:0x411 + len(title)] = title
+        header[0x1691:0x1691 + len(title)] = title
+        package.write_bytes(header + b"payload")
+
+        service = PackageWorkspaceService(self.db_path)
+        details = service.inspect(package)
+        self.assertFalse(details["mutation_ready"])
+        manifest = service.create_workspace(package, self.temp_dir / "workspace")
+        self.assertTrue(manifest.is_file())
+        self.assertTrue(json.loads(manifest.read_text(encoding="utf-8"))["read_only"])
+
+        intelligence = ProfileIntelligenceService(self.db_path)
+        preview = intelligence.preview_ownership_migration(
+            "E000000000000001", package, target_profile_id="E000000000000002"
+        )
+        self.assertGreater(preview["preview_id"], 0)
+        self.assertIn("Preview only", preview["warnings"][0])
+        other = self.temp_dir / "other.bin"
+        other.write_bytes(package.read_bytes()[:-1] + b"x")
+        comparison = intelligence.compare_save_files(package, other)
+        self.assertFalse(comparison["identical"])
+
+
 def run_tests():
     """Run all tests"""
     # Create test suite
@@ -1762,6 +1990,7 @@ def run_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestProfileSaveManager))
     suite.addTests(loader.loadTestsFromTestCase(TestRoadmapFeatures))
     suite.addTests(loader.loadTestsFromTestCase(TestUnifiedV1Foundation))
+    suite.addTests(loader.loadTestsFromTestCase(TestCommunityRoadmap))
     
     # Run tests
     runner = unittest.TextTestRunner(verbosity=2)

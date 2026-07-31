@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
         python: ["3.10", "3.12"]
 
     steps:
@@ -56,6 +56,10 @@ jobs:
           sh -n build_linux.sh
           sh -n packaging/linux/install.sh
           sh -n packaging/linux/uninstall.sh
+
+      - name: Validate macOS shell script
+        if: runner.os == 'macOS'
+        run: sh -n build_macos.sh
 
   windows-build:
     name: Windows executable
@@ -135,4 +139,36 @@ jobs:
           path: |
             dist/UnityScraper-Linux-x86_64.tar.gz
             dist/UnityScraper-Linux-x86_64.tar.gz.sha256
+          if-no-files-found: error
+
+  macos-build:
+    name: macOS application
+    runs-on: macos-14
+    needs: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install build dependencies
+        run: python -m pip install -r requirements.txt pyinstaller
+
+      - name: Build macOS application
+        run: ./build_macos.sh
+
+      - name: Validate application bundle
+        run: |
+          test -x dist/UnityScraper.app/Contents/MacOS/UnityScraper
+          plutil -lint dist/UnityScraper.app/Contents/Info.plist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UnityScraper-macOS-arm64
+          path: |
+            dist/UnityScraper-macOS-arm64.tar.gz
+            dist/UnityScraper-macOS-arm64.tar.gz.sha256
           if-no-files-found: error
