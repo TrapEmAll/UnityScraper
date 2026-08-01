@@ -4,7 +4,7 @@ The Community Hub brings the wider Xbox and preservation workflows into one
 source-attributed, offline-capable workspace. Open it from the desktop sidebar
 or press `Ctrl+K` to focus unified search.
 
-## Twenty Integrated Capabilities
+## Integrated Capabilities
 
 1. Unified local search across games, identifiers, wiki knowledge, profiles,
    saves, achievements, files, and structured reference records.
@@ -40,6 +40,13 @@ or press `Ctrl+K` to focus unified search.
 20. Cross-platform accessibility and packaging: scalable text, high contrast,
     reduced-motion preferences, keyboard hints, and Windows, Linux, and macOS
     build paths.
+21. Read-only extraction of supported consecutive STFS files with hashes and a
+    portable extraction manifest.
+22. Non-personal `.usmeta` snapshot export/import for offline title and knowledge data.
+23. Library attention audits and privacy-conscious preservation reports.
+24. Reviewed correction-package exports and local hardware inventory records.
+25. Direct Xenia/Xenia Canary discovery and game launch controls alongside the
+    existing snapshot-first save migration workflow.
 
 ## Safety Rules
 
@@ -70,6 +77,11 @@ Migration 9 adds plugin collection audits and duplicate-recovery records. Enable
 plugins run during normal metadata collection only while their approved entrypoint
 checksum still matches. Long Community Hub operations run in a background worker;
 search results can be opened with Enter or a double-click.
+
+Migration 10 records metadata snapshot operations, library audits, preservation
+reports, correction exports, hardware notes, and package extractions. Enabled
+plugins execute in a timeout-controlled child process; this improves crash and
+resource isolation but is not an operating-system permission sandbox.
 
 Imported ConsoleMods, XenonLibrary, Free60, Redump, and No-Intro information
 continues to retain source, revision, citation, licensing, and conflict data.

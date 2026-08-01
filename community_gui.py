@@ -25,9 +25,17 @@ from community_services import (
     StorageAndXboxService,
 )
 from profile_intelligence import ProfileIntelligenceService
+from roadmap_services import (
+    CorrectionPackageService,
+    HardwareInventoryService,
+    LibraryIntelligenceService,
+    MetadataSnapshotService,
+    PreservationReportService,
+)
 from platform_support import open_path
 from structured_knowledge import StructuredKnowledgeService
 from unified_search import UnifiedSearchService
+from ui_theme import PALETTE
 
 
 class CommunityHubPage:
@@ -54,6 +62,11 @@ class CommunityHubPage:
         self.recovery = RecoveryService()
         self.compatibility = DashboardCompatibilityService()
         self.accessibility = AccessibilityService()
+        self.metadata_snapshots = MetadataSnapshotService()
+        self.library_intelligence = LibraryIntelligenceService()
+        self.preservation_reports = PreservationReportService()
+        self.corrections = CorrectionPackageService()
+        self.hardware = HardwareInventoryService()
         self.navigate = navigate
         self.search_rows: dict[str, dict[str, Any]] = {}
         self.task_events: queue.Queue[tuple[str, Future, Callable | None]] = queue.Queue()
@@ -77,6 +90,7 @@ class CommunityHubPage:
             ("Plugins", self._build_plugins),
             ("Recovery", self._build_recovery),
             ("Compatibility", self._build_compatibility),
+            ("Toolkit", self._build_toolkit),
             ("Accessibility", self._build_accessibility),
         ):
             frame = ttk.Frame(self.notebook, padding=12)
@@ -286,6 +300,9 @@ class CommunityHubPage:
         ttk.Button(buttons, text="Create Read-only Workspace", command=self._package_workspace).pack(
             side=tk.LEFT, padx=8
         )
+        ttk.Button(buttons, text="Extract Supported Files", command=self._extract_package).pack(
+            side=tk.LEFT, padx=(0, 8)
+        )
         ttk.Button(buttons, text="Ownership Migration Preview", command=self._ownership_preview).pack(
             side=tk.LEFT
         )
@@ -315,6 +332,18 @@ class CommunityHubPage:
             self._submit_output("Package workspace", self.profile_output, lambda: {
                 "manifest": str(self.packages.create_workspace(
                     package_path, destination))})
+
+    def _extract_package(self) -> None:
+        destination = filedialog.askdirectory(
+            parent=self.root, title="Choose read-only extraction folder"
+        )
+        if destination:
+            package_path = self.package_path.get()
+            self._submit_output(
+                "Package extraction",
+                self.profile_output,
+                lambda: self.packages.extract_read_only(package_path, destination),
+            )
 
     def _ownership_preview(self) -> None:
         profile_id = self.profile_id.get()
@@ -614,6 +643,97 @@ class CommunityHubPage:
         self._submit_output("Dashboard probe", self.compat_output,
                             lambda: self.compatibility.probe(dashboard, target))
 
+    def _build_toolkit(self, frame: ttk.Frame) -> None:
+        frame.columnconfigure(1, weight=1)
+        frame.rowconfigure(8, weight=1)
+        metadata = ttk.LabelFrame(frame, text="Portable metadata", padding=8)
+        metadata.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 8))
+        ttk.Button(metadata, text="Export Snapshot", command=self._export_metadata_snapshot).pack(
+            side=tk.LEFT
+        )
+        ttk.Button(metadata, text="Import Snapshot", command=self._import_metadata_snapshot).pack(
+            side=tk.LEFT, padx=6
+        )
+        ttk.Button(metadata, text="Audit Library", command=self._audit_library).pack(side=tk.LEFT)
+        ttk.Button(metadata, text="Preservation Report", command=self._preservation_report).pack(
+            side=tk.LEFT, padx=6
+        )
+        ttk.Button(metadata, text="Export Corrections", command=self._export_corrections).pack(
+            side=tk.LEFT
+        )
+
+        hardware = ttk.LabelFrame(frame, text="Console hardware record", padding=8)
+        hardware.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, 8))
+        hardware.columnconfigure(1, weight=1)
+        self.hardware_vars = {
+            key: tk.StringVar() for key in (
+                "label", "motherboard", "dvd_drive", "nand_type",
+                "dashboard_version", "console_type", "notes",
+            )
+        }
+        fields = (
+            ("Record label", "label"), ("Motherboard", "motherboard"),
+            ("DVD drive", "dvd_drive"), ("NAND", "nand_type"),
+            ("Dashboard", "dashboard_version"), ("Console type", "console_type"),
+            ("Notes", "notes"),
+        )
+        for row, (label, key) in enumerate(fields):
+            ttk.Label(hardware, text=label).grid(row=row // 2, column=(row % 2) * 2,
+                                                 sticky="w", padx=(0, 5), pady=3)
+            ttk.Entry(hardware, textvariable=self.hardware_vars[key], width=28).grid(
+                row=row // 2, column=(row % 2) * 2 + 1, sticky="ew", padx=(0, 12), pady=3
+            )
+        ttk.Button(hardware, text="Save Hardware Record", command=self._save_hardware).grid(
+            row=4, column=0, columnspan=4, sticky="w", pady=(6, 0)
+        )
+        self.toolkit_output = self._output(frame, 8, 3)
+
+    def _export_metadata_snapshot(self) -> None:
+        destination = filedialog.asksaveasfilename(
+            parent=self.root, title="Export metadata snapshot",
+            defaultextension=".usmeta", filetypes=(("UnityScraper metadata", "*.usmeta"),),
+        )
+        if destination:
+            self._submit_output("Metadata snapshot", self.toolkit_output,
+                                lambda: self.metadata_snapshots.export(destination))
+
+    def _import_metadata_snapshot(self) -> None:
+        source = filedialog.askopenfilename(
+            parent=self.root, title="Import metadata snapshot",
+            filetypes=(("UnityScraper metadata", "*.usmeta"), ("All files", "*.*")),
+        )
+        if source:
+            self._submit_output("Metadata import", self.toolkit_output,
+                                lambda: self.metadata_snapshots.import_snapshot(source))
+
+    def _audit_library(self) -> None:
+        self._submit_output("Library intelligence", self.toolkit_output,
+                            self.library_intelligence.audit)
+
+    def _preservation_report(self) -> None:
+        destination = filedialog.asksaveasfilename(
+            parent=self.root, title="Export preservation report",
+            defaultextension=".html", filetypes=(("HTML report", "*.html"),),
+        )
+        if destination:
+            self._submit_output("Preservation report", self.toolkit_output,
+                                lambda: self.preservation_reports.export_html(destination))
+
+    def _export_corrections(self) -> None:
+        destination = filedialog.asksaveasfilename(
+            parent=self.root, title="Export community corrections",
+            defaultextension=".json", filetypes=(("JSON package", "*.json"),),
+        )
+        if destination:
+            self._submit_output("Correction package", self.toolkit_output,
+                                lambda: self.corrections.export(destination))
+
+    def _save_hardware(self) -> None:
+        values = {key: variable.get() for key, variable in self.hardware_vars.items()}
+        label = values.pop("label")
+        self._submit_output("Hardware record", self.toolkit_output,
+                            lambda: self.hardware.save(label, **values))
+
     def _build_accessibility(self, frame: ttk.Frame) -> None:
         values = self.accessibility.get()
         self.access_vars: dict[str, tk.BooleanVar] = {}
@@ -649,8 +769,12 @@ class CommunityHubPage:
     @staticmethod
     def _output(frame: ttk.Frame, row: int, columnspan: int) -> tk.Text:
         frame.rowconfigure(row, weight=1)
-        output = tk.Text(frame, wrap=tk.WORD, height=12, background="#070b08",
-                         foreground="#eef4ef", insertbackground="#75d34b")
+        output = tk.Text(
+            frame, wrap=tk.WORD, height=12, background=PALETTE.field,
+            foreground=PALETTE.text, insertbackground=PALETTE.accent_hot,
+            selectbackground=PALETTE.selection, relief=tk.FLAT,
+            highlightthickness=1, highlightbackground=PALETTE.border,
+        )
         output.grid(row=row, column=0, columnspan=columnspan, sticky="nsew", pady=(8, 0))
         output.configure(state=tk.DISABLED)
         return output

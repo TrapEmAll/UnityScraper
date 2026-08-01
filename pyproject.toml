@@ -1,6 +1,6 @@
 [project]
 name = "unityscraper"
-version = "1.1.0b1"
+version = "1.2.0b1"
 description = "Xbox 360 library, knowledge, preservation, and backup manager"
 readme = "README.md"
 requires-python = ">=3.10"

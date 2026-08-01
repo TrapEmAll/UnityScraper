@@ -7,6 +7,22 @@ Notable changes to UnityScraper are documented here. The project follows
 
 ### Added
 
+- Additive schema migration 10 for metadata snapshot runs, library intelligence,
+  preservation reports, correction packages, hardware records, and package extractions.
+- Visual Studio 2010-inspired dark desktop theme shared by the modern and legacy
+  interfaces, including compact tool chrome, classic menus, dense tabs, and blue focus states.
+- Read-only extraction of consecutive STFS files with traversal protection,
+  bounded output, atomic publication, hashes, and an extraction manifest.
+- Portable `.usmeta` metadata snapshots that exclude profile and filesystem data
+  and merge source-attributed facts without replacing better library metadata.
+- Library attention audits, privacy-conscious HTML preservation reports,
+  community correction exports, and console hardware inventory records.
+- Xenia/Xenia Canary discovery and direct argument-vector game launching.
+- Scoped API tokens, fixed-window request limits, and API/CLI parity for the new toolkit.
+- Bounded JSON community language packs with English fallback.
+- Timeout-controlled child-process execution for enabled metadata plugins, with
+  POSIX CPU, memory, and output limits where the operating system supports them.
+
 - Additive schema migration 9 for plugin collection audits and reversible
   duplicate recovery records.
 - Runtime plugin loading with approved-checksum enforcement, bounded results,
@@ -93,7 +109,7 @@ Notable changes to UnityScraper are documented here. The project follows
 
 ### Changed
 
-- Version advanced to `1.1.0-beta.1`.
+- Version advanced to `1.2.0-beta.1`.
 - CI now runs the Python suite on Windows, Linux, and macOS.
 - Cached XboxUnity titles now resolve immediately in library lists and details,
   enrich matching rows page by page, and recover after interrupted refreshes.

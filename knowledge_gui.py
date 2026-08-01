@@ -10,10 +10,11 @@ from typing import Any
 
 from knowledge_service import KnowledgeService
 from knowledge_scheduler import KnowledgeScheduler
+from ui_theme import PALETTE
 
-TEXT = "#f2f5f2"
-ACCENT = "#72e000"
-BORDER = "#26352a"
+TEXT = PALETTE.text
+ACCENT = PALETTE.accent
+BORDER = PALETTE.border
 
 
 class KnowledgePage:
@@ -129,10 +130,10 @@ class KnowledgePage:
         self.detail_text = tk.Text(
             details,
             wrap=tk.WORD,
-            background="#070b08",
+            background=PALETTE.field,
             foreground=TEXT,
             insertbackground=ACCENT,
-            selectbackground="#315f12",
+            selectbackground=PALETTE.selection,
             selectforeground=TEXT,
             relief=tk.FLAT,
             highlightthickness=1,

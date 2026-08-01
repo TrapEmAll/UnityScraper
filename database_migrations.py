@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 def _now() -> str:
@@ -70,6 +70,7 @@ def ensure_application_schema(connection: sqlite3.Connection) -> int:
         (7, "profile intelligence and knowledge controls", _migration_roadmap),
         (8, "community roadmap workspaces", _migration_community_roadmap),
         (9, "hardening and plugin runtime", _migration_hardening),
+        (10, "release readiness workspaces", _migration_release_readiness),
     )
     for version, name, migration in migrations:
         if version in applied:
@@ -735,6 +736,72 @@ def _migration_hardening(connection: sqlite3.Connection) -> None:
             restored_at TEXT,
             status TEXT NOT NULL DEFAULT 'quarantined',
             FOREIGN KEY(action_id) REFERENCES dedup_actions(id)
+        );
+        """
+    )
+
+
+def _migration_release_readiness(connection: sqlite3.Connection) -> None:
+    """Add audit history for portable metadata, reports, and hardware records."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS metadata_snapshot_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            operation TEXT NOT NULL,
+            snapshot_path TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            completed_at TEXT,
+            catalog_count INTEGER NOT NULL DEFAULT 0,
+            fact_count INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL,
+            sha256 TEXT,
+            error_message TEXT
+        );
+        CREATE TABLE IF NOT EXISTS library_intelligence_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            title_count INTEGER NOT NULL DEFAULT 0,
+            issue_count INTEGER NOT NULL DEFAULT 0,
+            summary_json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS preservation_report_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            destination TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            report_format TEXT NOT NULL,
+            status TEXT NOT NULL,
+            sha256 TEXT
+        );
+        CREATE TABLE IF NOT EXISTS correction_packages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            operation TEXT NOT NULL,
+            package_path TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            correction_count INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL,
+            sha256 TEXT
+        );
+        CREATE TABLE IF NOT EXISTS hardware_inventory_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            label TEXT NOT NULL,
+            motherboard TEXT,
+            dvd_drive TEXT,
+            nand_type TEXT,
+            dashboard_version TEXT,
+            console_type TEXT,
+            notes TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS package_extraction_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_path TEXT NOT NULL,
+            destination TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            extracted_count INTEGER NOT NULL DEFAULT 0,
+            skipped_count INTEGER NOT NULL DEFAULT 0,
+            manifest_path TEXT,
+            status TEXT NOT NULL
         );
         """
     )

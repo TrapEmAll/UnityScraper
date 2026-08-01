@@ -312,6 +312,115 @@ def list_stfs_entries(path: str | Path, max_entries: int = 100_000) -> list[Stfs
     return entries
 
 
+def extract_stfs_files(
+    path: str | Path,
+    destination: str | Path,
+    selected_paths: Iterable[str] | None = None,
+    *,
+    max_output_size: int = 32 * 1024 * 1024 * 1024,
+) -> dict[str, Any]:
+    """Extract consecutive STFS files read-only with path and size validation.
+
+    Fragmented files are reported instead of guessed. This keeps extraction useful
+    while making the unsupported block-chain case explicit and non-destructive.
+    """
+    package = Path(path).expanduser().resolve()
+    target = Path(destination).expanduser().resolve()
+    if package == target or target.is_relative_to(package):
+        raise InvalidPackageError("Extraction destination must be outside the package")
+    requested = {item.replace("\\", "/") for item in selected_paths or ()}
+    entries = list_stfs_entries(package)
+    files = [
+        entry for entry in entries
+        if not entry.is_directory and (not requested or entry.path in requested)
+    ]
+    if requested - {entry.path for entry in files}:
+        missing = sorted(requested - {entry.path for entry in files})
+        raise InvalidPackageError(f"STFS entries were not found: {', '.join(missing[:5])}")
+    total_size = sum(entry.size for entry in files)
+    if total_size > max_output_size:
+        raise InvalidPackageError("Selected STFS output exceeds the extraction safety limit")
+
+    with package.open("rb") as handle:
+        header = handle.read(0x3AD)
+        if len(header) < 0x3AD or header[:4] not in STFS_MAGICS:
+            raise InvalidPackageError("Not a supported STFS package")
+        header_size = int.from_bytes(header[0x340:0x344], "big")
+        descriptor = header[0x379:0x39D]
+        block_separation = descriptor[2]
+        allocated = int.from_bytes(descriptor[0x1C:0x20], "big")
+        aligned_header = (header_size + 0xFFF) & 0xFFFFF000
+        target.mkdir(parents=True, exist_ok=True)
+        extracted: list[dict[str, Any]] = []
+        skipped: list[dict[str, str]] = []
+        for entry in files:
+            if not entry.consecutive and entry.allocated_blocks > 1:
+                skipped.append({"path": entry.path, "reason": "fragmented block chain"})
+                continue
+            required_blocks = (entry.size + 0xFFF) // 0x1000
+            if required_blocks > entry.allocated_blocks or entry.starting_block + required_blocks > allocated:
+                skipped.append({"path": entry.path, "reason": "invalid block allocation"})
+                continue
+            relative = _safe_archive_member(entry.path)
+            output = (target / relative).resolve()
+            if not output.is_relative_to(target):
+                raise UnsafeArchiveError(f"STFS path escapes destination: {entry.path}")
+            if output.exists():
+                skipped.append({"path": entry.path, "reason": "destination exists"})
+                continue
+            output.parent.mkdir(parents=True, exist_ok=True)
+            partial = output.with_name(output.name + ".partial")
+            digest = hashlib.sha256()
+            remaining = entry.size
+            try:
+                with partial.open("xb") as destination_handle:
+                    for block in range(entry.starting_block, entry.starting_block + required_blocks):
+                        physical = _stfs_data_block_number(
+                            block, header[:4], header_size, block_separation
+                        )
+                        offset = aligned_header + physical * 0x1000
+                        if offset + min(remaining, 0x1000) > package.stat().st_size:
+                            raise InvalidPackageError(
+                                f"STFS data points outside the package: {entry.path}"
+                            )
+                        handle.seek(offset)
+                        chunk = handle.read(min(remaining, 0x1000))
+                        if len(chunk) != min(remaining, 0x1000):
+                            raise InvalidPackageError(f"STFS data is truncated: {entry.path}")
+                        destination_handle.write(chunk)
+                        digest.update(chunk)
+                        remaining -= len(chunk)
+                partial.replace(output)
+            finally:
+                partial.unlink(missing_ok=True)
+            extracted.append({
+                "path": entry.path,
+                "output": str(output),
+                "size": entry.size,
+                "sha256": digest.hexdigest(),
+            })
+    manifest = target / "unityscraper-stfs-extraction.json"
+    manifest.write_text(json.dumps({
+        "schema": 1,
+        "source": str(package),
+        "source_sha256": sha256_file(package),
+        "read_only": True,
+        "extracted": extracted,
+        "skipped": skipped,
+    }, indent=2), encoding="utf-8")
+    return {"manifest": str(manifest), "extracted": extracted, "skipped": skipped}
+
+
+def _safe_archive_member(value: str) -> Path:
+    normalized = value.replace("\\", "/")
+    pure = PurePosixPath(normalized)
+    if pure.is_absolute() or not pure.parts or any(part in {"", ".", ".."} for part in pure.parts):
+        raise UnsafeArchiveError(f"Unsafe package path: {value}")
+    if ":" in pure.parts[0]:
+        raise UnsafeArchiveError(f"Unsafe package path: {value}")
+    return Path(*pure.parts)
+
+
 def inspect_xbe(path: str | Path) -> XbePackage:
     """Read TitleID and title from an original Xbox executable certificate."""
     package_path = Path(path)

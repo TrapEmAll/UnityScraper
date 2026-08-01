@@ -26,6 +26,7 @@ from app_paths import (
     DOWNLOADS_DIR,
     EXPORTS_DIR,
     GUI_LOG_PATH,
+    LANGUAGE_PACKS_DIR,
     TITLEIDS_PATH,
     describe_storage,
     ensure_app_dirs,
@@ -46,12 +47,14 @@ from external_tools_gui import ExternalToolsPage
 from knowledge_service import KnowledgeService
 from knowledge_scheduler import KnowledgeScheduler
 from knowledge_gui import KnowledgePage
+from i18n import SUPPORTED_LANGUAGES, init_translator, t
 from library_service import GameSummary, LibraryService
-from platform_support import desktop_font_family, open_path
+from platform_support import open_path
 from profile_gui import ProfileSavePage
 from profile_manager import ProfileSaveManager
 from setup_wizard import run_first_run_wizard
 from title_catalog import TitleSuggestion, XboxUnityTitleCatalog
+from ui_theme import PALETTE, UI_FONT, apply_vs2010_theme
 from updater import VersionChecker
 
 
@@ -68,17 +71,16 @@ COMMUNITY_MESSAGE = (
     "for years to come."
 )
 
-BG = "#050806"
-PANEL = "#0a0f0c"
-PANEL_ALT = "#0d1510"
-BORDER = "#26352a"
-ACCENT = "#72e000"
-ACCENT_HOVER = "#8cff18"
-TEXT = "#f2f5f2"
-MUTED = "#a5b2a8"
-DANGER = "#ff5d68"
-WARNING = "#ffc857"
-UI_FONT = desktop_font_family()
+BG = PALETTE.window
+PANEL = PALETTE.panel
+PANEL_ALT = PALETTE.panel_alt
+BORDER = PALETTE.border
+ACCENT = PALETTE.accent
+ACCENT_HOVER = PALETTE.accent_hot
+TEXT = PALETTE.text
+MUTED = PALETTE.muted
+DANGER = PALETTE.danger
+WARNING = PALETTE.warning
 
 
 def _open_path(path: Path) -> None:
@@ -124,7 +126,7 @@ class ResponsiveBackgroundBanner(ttk.Frame):
             height=self.banner_height,
             highlightthickness=0,
             borderwidth=0,
-            background="#0b0f0d",
+            background=PALETTE.window,
         )
         self.canvas.pack(fill=tk.X, expand=True)
 
@@ -151,32 +153,32 @@ class ResponsiveBackgroundBanner(ttk.Frame):
 
         if self._source_image is not None:
             image = self._cover_resize(self._source_image, width, height)
-            overlay = Image.new("RGB", image.size, "#050807")
-            image = Image.blend(image, overlay, 0.05)
+            overlay = Image.new("RGB", image.size, PALETTE.window)
+            image = Image.blend(image, overlay, 0.45)
             self._photo = ImageTk.PhotoImage(image)
             self.canvas.create_image(0, 0, image=self._photo, anchor=tk.NW)
         else:
             self.canvas.create_rectangle(
-                0, 0, width, height, fill="#0b0f0d", outline=""
+                0, 0, width, height, fill=PALETTE.window, outline=""
             )
             self.canvas.create_text(
                 width // 2,
                 height // 2,
                 text=f"Background not loaded: {self.image_path}",
                 anchor=tk.CENTER,
-                fill="#d6e6d3",
+                fill=PALETTE.muted,
                 font=(UI_FONT, 10),
             )
 
         self.canvas.create_rectangle(
-            0, height - 5, width, height, fill="#5bd600", outline=""
+            0, height - 4, width, height, fill=PALETTE.accent, outline=""
         )
         self.canvas.create_text(
             28,
             54,
             text=self.title,
             anchor=tk.W,
-            fill="#ffffff",
+            fill=PALETTE.text,
             font=(UI_FONT, 23, "bold"),
         )
         self.canvas.create_text(
@@ -184,7 +186,7 @@ class ResponsiveBackgroundBanner(ttk.Frame):
             94,
             text=self.subtitle,
             anchor=tk.W,
-            fill="#d6e6d3",
+            fill=PALETTE.muted,
             width=max(width - 60, 300),
             font=(UI_FONT, 11),
         )
@@ -197,7 +199,7 @@ class ResponsiveBackgroundBanner(ttk.Frame):
             (width, height),
             method=Image.Resampling.LANCZOS,
         )
-        background = Image.new("RGB", (width, height), "#080c0a")
+        background = Image.new("RGB", (width, height), PALETTE.window)
         left = (width - fitted.width) // 2
         top = (height - fitted.height) // 2
         background.paste(fitted, (left, top))
@@ -236,9 +238,9 @@ class TitleAutocomplete(ttk.Frame):
         self.listbox = tk.Listbox(
             self.popup,
             height=8,
-            background="#070b08",
+            background=PALETTE.field,
             foreground=TEXT,
-            selectbackground="#315f12",
+            selectbackground=PALETTE.selection,
             selectforeground=TEXT,
             highlightthickness=1,
             highlightbackground=BORDER,
@@ -346,6 +348,8 @@ class UnityScraperDesktop:
 
         self.root.title(f"UnityScraper {APP_VERSION}")
         config = self._read_config()
+        self.language = str(config.get("language", "en"))
+        init_translator(self.language, LANGUAGE_PACKS_DIR)
         scale = max(0.8, min(2.0, float(config.get("ui_scale", 1.0))))
         if self.accessibility_preferences["large_text"]:
             scale = min(2.0, scale + 0.25)
@@ -354,11 +358,13 @@ class UnityScraperDesktop:
         self.root.minsize(980, 640)
         self._set_icon()
         self._configure_style()
+        self._build_menubar()
         self._build_shell()
 
         if run_first_run_wizard(self.root):
             self.refresh_library()
-            self.root.after(750, self._start_catalog_sync_if_stale)
+            if bool(config.get("sync_title_catalog_on_start", True)):
+                self.root.after(750, self._start_catalog_sync_if_stale)
             self.root.after(1500, self._start_scheduled_knowledge_refresh)
         else:
             self.root.after(0, self.root.destroy)
@@ -374,98 +380,66 @@ class UnityScraperDesktop:
             pass
 
     def _configure_style(self) -> None:
-        self.root.configure(background=BG)
-        style = ttk.Style(self.root)
-        try:
-            style.theme_use("clam")
-        except tk.TclError:
-            pass
+        apply_vs2010_theme(
+            self.root,
+            high_contrast=bool(self.accessibility_preferences["high_contrast"]),
+            large_text=bool(self.accessibility_preferences["large_text"]),
+        )
 
-        style.configure(".", background=PANEL, foreground=TEXT, fieldbackground=PANEL_ALT,
-                        bordercolor=BORDER, darkcolor=PANEL, lightcolor=PANEL,
-                        troughcolor=BG, selectbackground="#315f12", selectforeground=TEXT,
-                        font=(UI_FONT, 10))
-        style.configure("TFrame", background=PANEL)
-        style.configure("Sidebar.TFrame", background="#060a07")
-        style.configure("Content.TFrame", background=PANEL)
-        style.configure("TLabel", background=PANEL, foreground=TEXT)
-        style.configure("Brand.TLabel", background="#060a07", foreground=TEXT,
-                        font=(UI_FONT, 17, "bold"))
-        style.configure("AccentBrand.TLabel", background="#060a07", foreground=ACCENT,
-                        font=(UI_FONT, 10))
-        style.configure("Header.TLabel", background=PANEL, foreground=TEXT,
-                        font=(UI_FONT, 24, "bold"))
-        style.configure("Subheader.TLabel", background=PANEL, foreground=MUTED,
-                        font=(UI_FONT, 11))
-        style.configure("Metric.TLabel", background=PANEL_ALT, foreground=ACCENT,
-                        font=(UI_FONT, 20, "bold"))
-        style.configure("CardTitle.TLabel", background=PANEL, foreground=ACCENT,
-                        font=(UI_FONT, 11, "bold"))
-        style.configure("StatusDownloaded.TLabel", background=PANEL, foreground=ACCENT)
-        style.configure("StatusFailed.TLabel", background=PANEL, foreground=DANGER)
-        style.configure("StatusPending.TLabel", background=PANEL, foreground=WARNING)
+    def _build_menubar(self) -> None:
+        menu_options = {
+            "background": PALETTE.chrome,
+            "foreground": PALETTE.text,
+            "activebackground": PALETTE.accent,
+            "activeforeground": "#FFFFFF",
+            "borderwidth": 0,
+            "font": (UI_FONT, 9),
+        }
+        bar = ttk.Frame(self.root, style="Toolbar.TFrame", padding=(5, 1))
+        bar.pack(side=tk.TOP, fill=tk.X)
 
-        style.configure("TButton", background=PANEL_ALT, foreground=TEXT, padding=(12, 8),
-                        borderwidth=1, relief="flat")
-        style.map("TButton", background=[("active", "#152319"), ("pressed", "#1b321e")],
-                  foreground=[("active", ACCENT_HOVER)])
-        style.configure("Nav.TButton", anchor=tk.W, padding=(16, 13), background="#080d09",
-                        foreground=TEXT, bordercolor="#1f3321")
-        style.map("Nav.TButton", background=[("active", "#142017"), ("pressed", "#1c351c")],
-                  foreground=[("active", ACCENT_HOVER)])
-        style.configure("Accent.TButton", background="#183a0b", foreground=TEXT,
-                        bordercolor=ACCENT)
-        style.map("Accent.TButton", background=[("active", "#24580d")],
-                  foreground=[("active", TEXT)])
+        file_menu = tk.Menu(self.root, tearoff=False, **menu_options)
+        file_menu.add_command(label="Add Games...", command=self.show_add_games)
+        file_menu.add_command(label="Open Application Data", command=lambda: _open_path(BASE_DIR))
+        file_menu.add_separator()
+        file_menu.add_command(label="Exit", command=self.root.destroy)
+        view_menu = tk.Menu(self.root, tearoff=False, **menu_options)
+        view_menu.add_command(label="Library", command=self.show_library)
+        view_menu.add_command(label="Downloads", command=self.show_downloads)
+        view_menu.add_command(label="Profiles & Saves", command=self.show_profiles)
+        view_menu.add_command(label="Knowledge", command=self.show_knowledge)
+        view_menu.add_command(label="Community Hub", command=self.show_community_hub)
+        tools_menu = tk.Menu(self.root, tearoff=False, **menu_options)
+        tools_menu.add_command(label="Backup Manager", command=self.show_backups)
+        tools_menu.add_command(label="External Tools", command=self.show_external_tools)
+        tools_menu.add_command(label="Archive Health", command=self.show_health)
+        tools_menu.add_command(label="Settings", command=self.show_settings)
+        help_menu = tk.Menu(self.root, tearoff=False, **menu_options)
+        help_menu.add_command(label="Help & About", command=self.show_about)
+        help_menu.add_command(label="Check for Updates", command=self._check_updates)
 
-        style.configure("TLabelframe", background=PANEL, foreground=ACCENT,
-                        bordercolor=BORDER, relief="solid", borderwidth=1)
-        style.configure("TLabelframe.Label", background=PANEL, foreground=ACCENT,
-                        font=(UI_FONT, 10, "bold"))
-        style.configure("TEntry", fieldbackground="#070b08", foreground=TEXT,
-                        insertcolor=ACCENT, bordercolor=BORDER, padding=7)
-        style.configure("TSpinbox", fieldbackground="#070b08", foreground=TEXT,
-                        insertcolor=ACCENT, bordercolor=BORDER, arrowcolor=ACCENT)
-        style.configure("Treeview", background="#070b08", fieldbackground="#070b08",
-                        foreground=TEXT, rowheight=27, bordercolor=BORDER)
-        style.map("Treeview", background=[("selected", "#23480f")],
-                  foreground=[("selected", TEXT)])
-        style.configure("Treeview.Heading", background="#101912", foreground=TEXT,
-                        bordercolor=BORDER, relief="flat", font=(UI_FONT, 9, "bold"))
-        style.map("Treeview.Heading", background=[("active", "#18271b")],
-                  foreground=[("active", ACCENT)])
-        style.configure("TNotebook", background=PANEL, bordercolor=BORDER)
-        style.configure("TNotebook.Tab", background="#0b120d", foreground=MUTED, padding=(12, 7))
-        style.map("TNotebook.Tab", background=[("selected", "#173114"), ("active", "#132219")],
-                  foreground=[("selected", ACCENT), ("active", TEXT)])
-        style.configure("Vertical.TScrollbar", background="#111a13", troughcolor="#050806",
-                        arrowcolor=ACCENT, bordercolor=BORDER)
-
-        if self.accessibility_preferences["high_contrast"]:
-            contrast_bg = "#000000"
-            contrast_text = "#ffffff"
-            contrast_accent = "#b6ff00"
-            self.root.configure(background=contrast_bg)
-            style.configure(".", background=contrast_bg, foreground=contrast_text,
-                            fieldbackground=contrast_bg, bordercolor=contrast_text,
-                            troughcolor=contrast_bg, selectbackground=contrast_accent,
-                            selectforeground=contrast_bg)
-            for name in ("TFrame", "Content.TFrame", "TLabel", "TLabelframe",
-                         "TLabelframe.Label", "TNotebook"):
-                style.configure(name, background=contrast_bg, foreground=contrast_text)
-            style.configure("Sidebar.TFrame", background=contrast_bg)
-            style.configure("Brand.TLabel", background=contrast_bg, foreground=contrast_text)
-            style.configure("AccentBrand.TLabel", background=contrast_bg,
-                            foreground=contrast_accent)
-            style.configure("TButton", background=contrast_bg, foreground=contrast_text,
-                            bordercolor=contrast_text)
-            style.configure("Nav.TButton", background=contrast_bg, foreground=contrast_text,
-                            bordercolor=contrast_text)
-            style.configure("Treeview", background=contrast_bg, fieldbackground=contrast_bg,
-                            foreground=contrast_text, bordercolor=contrast_text)
-            style.configure("Treeview.Heading", background=contrast_bg,
-                            foreground=contrast_accent, bordercolor=contrast_text)
-            style.configure("TNotebook.Tab", background=contrast_bg, foreground=contrast_text)
+        for label, submenu in (
+            ("File", file_menu),
+            ("View", view_menu),
+            ("Tools", tools_menu),
+            ("Help", help_menu),
+        ):
+            button = tk.Menubutton(
+                bar,
+                text=label,
+                menu=submenu,
+                background=PALETTE.chrome,
+                foreground=PALETTE.text,
+                activebackground=PALETTE.accent,
+                activeforeground="#FFFFFF",
+                borderwidth=0,
+                relief=tk.FLAT,
+                font=(UI_FONT, 9),
+                padx=7,
+                pady=3,
+            )
+            button.pack(side=tk.LEFT)
+        self._menu = bar
 
     def _build_shell(self) -> None:
         self._wallpaper_source: Image.Image | None = None
@@ -481,8 +455,8 @@ class UnityScraperDesktop:
         self.shell.pack(fill=tk.BOTH, expand=True)
         self._wallpaper_item = self.shell.create_image(0, 0, anchor=tk.NW)
 
-        nav = ttk.Frame(self.shell, padding=(14, 18), style="Sidebar.TFrame")
-        self.content = ttk.Frame(self.shell, padding=18, style="Content.TFrame")
+        nav = ttk.Frame(self.shell, padding=(8, 10), style="Sidebar.TFrame")
+        self.content = ttk.Frame(self.shell, padding=12, style="Content.TFrame")
         self._nav_window = self.shell.create_window(0, 0, anchor=tk.NW, window=nav)
         self._content_window = self.shell.create_window(0, 0, anchor=tk.NW, window=self.content)
 
@@ -492,18 +466,18 @@ class UnityScraperDesktop:
         )
 
         pages = (
-            ("LIBRARY", self.show_library),
-            ("ADD GAMES", self.show_add_games),
-            ("DOWNLOADS", self.show_downloads),
-            ("BACKUP MANAGER", self.show_backups),
-            ("PROFILES & SAVES", self.show_profiles),
-            ("EXTERNAL TOOLS", self.show_external_tools),
-            ("COLLECTIONS", self.show_collections),
-            ("KNOWLEDGE", self.show_knowledge),
-            ("COMMUNITY HUB", self.show_community_hub),
-            ("ARCHIVE HEALTH", self.show_health),
-            ("SETTINGS", self.show_settings),
-            ("HELP & ABOUT", self.show_about),
+            (t("nav_library"), self.show_library),
+            (t("nav_add_games"), self.show_add_games),
+            (t("nav_downloads"), self.show_downloads),
+            (t("nav_backups"), self.show_backups),
+            (t("nav_profiles"), self.show_profiles),
+            (t("nav_tools"), self.show_external_tools),
+            (t("nav_collections"), self.show_collections),
+            (t("nav_knowledge"), self.show_knowledge),
+            (t("nav_community"), self.show_community_hub),
+            (t("nav_health"), self.show_health),
+            (t("nav_settings"), self.show_settings),
+            (t("nav_about"), self.show_about),
         )
         for index, (label, callback) in enumerate(pages, start=1):
             shortcut = navigation_shortcut(index)
@@ -511,15 +485,12 @@ class UnityScraperDesktop:
             if shortcut and self.accessibility_preferences["keyboard_hints"]:
                 display_label = f"{label}    Alt+{shortcut}"
             ttk.Button(nav, text=display_label, command=callback, style="Nav.TButton", width=22).pack(
-                fill=tk.X, pady=3
+                fill=tk.X, pady=1
             )
 
-        ttk.Label(nav, text="CONNECTED", style="AccentBrand.TLabel").pack(
-            side=tk.BOTTOM, anchor=tk.W, padx=6, pady=(4, 0)
-        )
-        ttk.Label(nav, text="Ready", style="AccentBrand.TLabel").pack(
-            side=tk.BOTTOM, anchor=tk.W, padx=6
-        )
+        status = ttk.Frame(nav, style="Statusbar.TFrame", padding=(7, 4))
+        status.pack(side=tk.BOTTOM, fill=tk.X)
+        ttk.Label(status, text="Ready", style="Statusbar.TLabel").pack(anchor=tk.W)
 
         self.content.columnconfigure(0, weight=1)
         self.content.rowconfigure(1, weight=1)
@@ -539,15 +510,15 @@ class UnityScraperDesktop:
     def _resize_shell(self, _event: tk.Event[Any] | None) -> None:
         width = max(self.shell.winfo_width(), 980)
         height = max(self.shell.winfo_height(), 640)
-        nav_width = 230
-        gap = 12
+        nav_width = 218
+        gap = 1
 
         if self._wallpaper_source is not None:
             image = ImageOps.fit(
                 self._wallpaper_source, (width, height),
                 method=Image.Resampling.LANCZOS, centering=(0.5, 0.5)
             )
-            image = Image.blend(image, Image.new("RGB", image.size, BG), 0.30)
+            image = Image.blend(image, Image.new("RGB", image.size, BG), 0.72)
             self._wallpaper_photo = ImageTk.PhotoImage(image)
             self.shell.itemconfigure(self._wallpaper_item, image=self._wallpaper_photo)
 
@@ -606,7 +577,7 @@ class UnityScraperDesktop:
         ttk.Label(header, text=subtitle, style="Subheader.TLabel").pack(
             anchor=tk.W, pady=(5, 0)
         )
-        tk.Frame(header, height=2, background=ACCENT).pack(fill=tk.X, pady=(13, 0))
+        tk.Frame(header, height=1, background=BORDER).pack(fill=tk.X, pady=(9, 0))
 
     def show_library(self) -> None:
         self._clear_content()
@@ -890,7 +861,7 @@ class UnityScraperDesktop:
             text="Selected TitleIDs:",
         ).grid(row=3, column=0, sticky=tk.W)
 
-        self.add_titleids_text = tk.Text(panel, height=8, wrap=tk.WORD, background="#070b08", foreground=TEXT, insertbackground=ACCENT, selectbackground="#315f12", selectforeground=TEXT, relief=tk.FLAT, highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT)
+        self.add_titleids_text = tk.Text(panel, height=8, wrap=tk.WORD, background=PALETTE.field, foreground=TEXT, insertbackground=ACCENT, selectbackground=PALETTE.selection, selectforeground=TEXT, relief=tk.FLAT, highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT)
         self.add_titleids_text.grid(row=4, column=0, sticky="ew", pady=8)
 
         actions = ttk.Frame(panel)
@@ -1152,7 +1123,7 @@ class UnityScraperDesktop:
             command=self._run_health_scan,
         ).grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
 
-        self.health_text = tk.Text(panel, wrap=tk.WORD, background="#070b08", foreground=TEXT, insertbackground=ACCENT, selectbackground="#315f12", selectforeground=TEXT, relief=tk.FLAT, highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT)
+        self.health_text = tk.Text(panel, wrap=tk.WORD, background=PALETTE.field, foreground=TEXT, insertbackground=ACCENT, selectbackground=PALETTE.selection, selectforeground=TEXT, relief=tk.FLAT, highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT)
         self.health_text.grid(row=1, column=0, sticky="nsew")
         self.health_text.insert(
             tk.END,
@@ -1215,6 +1186,7 @@ class UnityScraperDesktop:
         self.timeout_var = tk.IntVar(value=int(config.get("timeout", 30)))
         self.retries_var = tk.IntVar(value=int(config.get("max_retries", 3)))
         self.scale_var = tk.DoubleVar(value=float(config.get("ui_scale", 1.0)))
+        self.language_var = tk.StringVar(value=str(config.get("language", "en")))
 
         ttk.Label(panel, text="Archive folder").grid(row=0, column=0, sticky=tk.W)
         ttk.Entry(panel, textvariable=self.output_var).grid(
@@ -1250,11 +1222,17 @@ class UnityScraperDesktop:
                 width=12,
             ).grid(row=offset, column=1, sticky=tk.W, padx=8)
 
+        ttk.Label(panel, text="Language").grid(row=8, column=0, sticky=tk.W, pady=5)
+        ttk.Combobox(
+            panel, textvariable=self.language_var, state="readonly",
+            values=tuple(SUPPORTED_LANGUAGES), width=12,
+        ).grid(row=8, column=1, sticky=tk.W, padx=8)
+
         ttk.Button(
             panel,
             text="Save Settings",
             command=self._save_settings,
-        ).grid(row=8, column=2, sticky=tk.E, pady=(16, 0))
+        ).grid(row=9, column=2, sticky=tk.E, pady=(16, 0))
 
     def _browse_output(self) -> None:
         selected = filedialog.askdirectory(
@@ -1281,12 +1259,15 @@ class UnityScraperDesktop:
                 "timeout": self.timeout_var.get(),
                 "max_retries": self.retries_var.get(),
                 "ui_scale": self.scale_var.get(),
+                "language": self.language_var.get(),
             }
         )
         CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
         self.root.tk.call("tk", "scaling", max(0.8, min(2.0, self.scale_var.get())))
         messagebox.showinfo(
-            "Settings", "Settings saved. Interface scaling applies immediately.", parent=self.root
+            "Settings",
+            "Settings saved. Interface scaling applies immediately; language changes apply after restart.",
+            parent=self.root,
         )
 
     @staticmethod

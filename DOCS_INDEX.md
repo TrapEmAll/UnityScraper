@@ -24,6 +24,8 @@
   and signing limitations
 - [Community Hub](COMMUNITY_HUB.md) - unified search, profile/package tools,
   guided console plans, preservation, plugins, recovery, and safety boundaries
+- [Release Toolkit](RELEASE_TOOLKIT.md) - portable metadata snapshots, library
+  audits, preservation reports, corrections, and hardware inventory
 - [Project Status](PROJECT_STATUS.md) - completed work, boundaries, and roadmap
 - [Changelog](CHANGELOG.md) - release history
 

@@ -19,6 +19,7 @@ from external_tools import (
     format_command,
     split_arguments,
 )
+from ui_theme import PALETTE
 
 
 XEXTOOL_PRESETS = {
@@ -165,15 +166,15 @@ class ExternalToolsPage:
         self.output_text = tk.Text(
             output_panel,
             wrap=tk.WORD,
-            background="#070b08",
-            foreground="#f2f5f2",
-            insertbackground="#72e000",
-            selectbackground="#315f12",
-            selectforeground="#f2f5f2",
+            background=PALETTE.field,
+            foreground=PALETTE.text,
+            insertbackground=PALETTE.accent_hot,
+            selectbackground=PALETTE.selection,
+            selectforeground=PALETTE.text,
             relief=tk.FLAT,
             highlightthickness=1,
-            highlightbackground="#26352a",
-            highlightcolor="#72e000",
+            highlightbackground=PALETTE.border,
+            highlightcolor=PALETTE.accent,
         )
         self.output_text.grid(row=0, column=0, sticky="nsew")
         scrollbar = ttk.Scrollbar(

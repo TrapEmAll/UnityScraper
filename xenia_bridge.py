@@ -6,6 +6,7 @@ import hashlib
 import os
 import re
 import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -19,6 +20,14 @@ COPY_CHUNK = 1024 * 1024
 
 class XeniaBridgeError(RuntimeError):
     """Raised when a Xenia root or migration plan is unsafe."""
+
+
+@dataclass(frozen=True)
+class XeniaInstallation:
+    executable: Path
+    root: Path
+    content_root: Path | None
+    variant: str
 
 
 @dataclass(frozen=True)
@@ -91,6 +100,46 @@ def find_xenia_content_root(path: str | Path | None = None) -> Path | None:
         if nested.is_dir():
             return nested.resolve()
     return None
+
+
+def find_xenia_installation(path: str | Path) -> XeniaInstallation | None:
+    """Find a conventional Xenia executable without searching unrelated folders."""
+    selected = Path(path).expanduser().resolve()
+    candidates: list[Path] = []
+    if selected.is_file():
+        candidates.append(selected)
+        root = selected.parent
+    else:
+        root = selected.parent if selected.name.casefold() == "content" else selected
+        names = ("xenia_canary.exe", "xenia.exe", "xenia-canary", "xenia")
+        candidates.extend(root / name for name in names)
+        candidates.extend(root.parent / name for name in names if selected.name.casefold() == "content")
+    executable = next((item for item in candidates if item.is_file()), None)
+    if executable is None:
+        return None
+    content = find_xenia_content_root(root)
+    variant = "Canary" if "canary" in executable.name.casefold() else "Master"
+    return XeniaInstallation(executable, executable.parent, content, variant)
+
+
+def launch_xenia(
+    installation: XeniaInstallation,
+    game_path: str | Path,
+    *,
+    fullscreen: bool = False,
+) -> dict[str, object]:
+    """Launch a user-selected title through an argument list, never a shell."""
+    game = Path(game_path).expanduser().resolve()
+    if not installation.executable.is_file():
+        raise FileNotFoundError(installation.executable)
+    if not game.is_file() and not game.is_dir():
+        raise FileNotFoundError(game)
+    command = [str(installation.executable), str(game)]
+    if fullscreen:
+        command.append("--fullscreen=true")
+    process = subprocess.Popen(command, cwd=installation.root)
+    return {"pid": process.pid, "variant": installation.variant,
+            "executable": str(installation.executable), "game": str(game)}
 
 
 def scan_xenia_saves(content_root: str | Path) -> tuple[XeniaSave, ...]:

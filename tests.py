@@ -48,6 +48,7 @@ from backup_manager import (
     UnsafeArchiveError,
     atomic_copy,
     import_stfs_zip,
+    extract_stfs_files,
     inspect_stfs,
     inspect_xbe,
     list_stfs_entries,
@@ -70,6 +71,20 @@ class TestPlatformSupport(unittest.TestCase):
 
         self.assertEqual(TRANSLATIONS["es"]["settings"], "Configuraci\u00f3n")
         self.assertEqual(TRANSLATIONS["ja"]["browse"], "\u53c2\u7167")
+
+    def test_bounded_language_pack_extends_navigation_with_english_fallback(self):
+        from i18n import init_translator
+
+        root = Path(tempfile.mkdtemp())
+        try:
+            (root / "nl.json").write_text(json.dumps({
+                "language": "nl", "strings": {"nav_library": "BIBLIOTHEEK"}
+            }), encoding="utf-8")
+            translator = init_translator("nl", root)
+            self.assertEqual(translator.get("nav_library"), "BIBLIOTHEEK")
+            self.assertEqual(translator.get("nav_settings"), "SETTINGS")
+        finally:
+            shutil.rmtree(root)
 
     def test_linux_uses_xdg_directories(self):
         home = Path("/home/tester")
@@ -1125,7 +1140,7 @@ class TestBackupManager(unittest.TestCase):
         self.assertEqual(package.save_game_id, "12345678")
 
     def test_stfs_file_table_is_inventoried_read_only(self):
-        payload = bytearray(0xC000)
+        payload = bytearray(0xD000)
         payload[:4] = b"LIVE"
         payload[0x340:0x344] = (0xA000).to_bytes(4, "big")
         payload[0x344:0x348] = (1).to_bytes(4, "big")
@@ -1148,6 +1163,15 @@ class TestBackupManager(unittest.TestCase):
         self.assertEqual(entries[0].path, "savegame.dat")
         self.assertEqual(entries[0].size, 123)
         self.assertTrue(entries[0].consecutive)
+
+        payload[0x379 + 0x1C:0x379 + 0x20] = (2).to_bytes(4, "big")
+        payload[0xC000:0xC004] = b"data"
+        package_path.write_bytes(payload)
+        destination = self.temp_dir / "extracted"
+        result = extract_stfs_files(package_path, destination)
+        self.assertEqual((destination / "savegame.dat").read_bytes()[:4], b"data")
+        self.assertEqual(result["extracted"][0]["size"], 123)
+        self.assertTrue(Path(result["manifest"]).is_file())
 
     def test_rejects_unknown_stfs_content_type(self):
         with self.assertRaises(InvalidPackageError):
@@ -1356,6 +1380,27 @@ class TestRestAPI(unittest.TestCase):
             headers={"Authorization": "Bearer secret"},
         )
         self.assertEqual(response.status_code, 200)
+
+    def test_scoped_tokens_and_request_limits_are_enforced(self):
+        api = UnityScraperAPI(
+            self.scraper,
+            token_scopes={"reader": ["read"], "writer": ["read", "write"]},
+            requests_per_minute=10,
+        )
+        client = api.app.test_client()
+        self.assertEqual(client.get(
+            "/api/titleids", headers={"X-API-Key": "reader"}
+        ).status_code, 200)
+        self.assertEqual(client.post(
+            "/api/config", json={"workers": 5}, headers={"X-API-Key": "reader"}
+        ).status_code, 403)
+        self.assertEqual(client.post(
+            "/api/config", json={"workers": 5}, headers={"X-API-Key": "writer"}
+        ).status_code, 200)
+        limited = UnityScraperAPI(self.scraper, requests_per_minute=10).app.test_client()
+        for _ in range(10):
+            self.assertEqual(limited.get("/api/health").status_code, 200)
+        self.assertEqual(limited.get("/api/health").status_code, 429)
 
     def test_config_rejects_unknown_and_https_keys(self):
         client = UnityScraperAPI(self.scraper).app.test_client()
@@ -1578,6 +1623,30 @@ class TestRoadmapFeatures(unittest.TestCase):
         )
         self.assertEqual(second.items[0].action, "skip")
 
+    @patch("xenia_bridge.subprocess.Popen")
+    def test_xenia_installation_is_discovered_and_launched_without_a_shell(self, popen):
+        from xenia_bridge import find_xenia_installation, launch_xenia
+
+        root = self.temp_dir / "xenia"
+        root.mkdir()
+        executable = root / ("xenia.exe" if os.name == "nt" else "xenia")
+        executable.write_bytes(b"binary")
+        game = root / "game.iso"
+        game.write_bytes(b"image")
+        installation = find_xenia_installation(root)
+        self.assertIsNotNone(installation)
+        popen.return_value.pid = 42
+        result = launch_xenia(installation, game, fullscreen=True)
+        self.assertEqual(result["pid"], 42)
+        popen.assert_called_once_with(
+            [
+                str(installation.executable),
+                str(game.resolve()),
+                "--fullscreen=true",
+            ],
+            cwd=installation.root,
+        )
+
     def test_knowledge_priority_and_conflict_resolution_are_persistent(self):
         import sqlite3
         from contextlib import closing
@@ -1686,7 +1755,7 @@ class TestUnifiedV1Foundation(unittest.TestCase):
             versions = connection.execute(
                 "SELECT version FROM app_schema_migrations ORDER BY version"
             ).fetchall()
-        self.assertEqual([row[0] for row in versions], [1, 2, 3, 4, 5, 6, 7, 8, 9])
+        self.assertEqual([row[0] for row in versions], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
         self.assertIn("collection_snapshots", tables)
         self.assertIn("preservation_matches", tables)
         self.assertIn("console_transfer_jobs", tables)
@@ -1703,6 +1772,84 @@ class TestUnifiedV1Foundation(unittest.TestCase):
         self.assertIn("scheduled_sync_state", tables)
         self.assertIn("plugin_collection_runs", tables)
         self.assertIn("dedup_recovery_records", tables)
+        self.assertIn("metadata_snapshot_runs", tables)
+        self.assertIn("library_intelligence_runs", tables)
+        self.assertIn("preservation_report_runs", tables)
+        self.assertIn("hardware_inventory_records", tables)
+
+    def test_release_readiness_toolkit_exports_portable_nonpersonal_metadata(self):
+        import sqlite3
+        from contextlib import closing
+
+        from knowledge_base import EntityRecord, Fact, Identifier, KnowledgeRepository
+        from roadmap_services import (
+            CorrectionPackageService,
+            HardwareInventoryService,
+            LibraryIntelligenceService,
+            MetadataSnapshotService,
+            PreservationReportService,
+        )
+
+        self.database.add_titleid("53510804", "Hitman: Absolution", "Unknown")
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            repository = KnowledgeRepository(connection)
+            source_id = repository.upsert_source(
+                "test-source", "Test Source", license_name="CC0"
+            )
+            repository.upsert_entity_record(EntityRecord(
+                "game", "Hitman: Absolution",
+                identifiers=(Identifier("titleid", "53510804"),),
+                facts=(Fact("publisher", "Square Enix"),),
+            ), source_id)
+            connection.execute(
+                """INSERT INTO xboxunity_title_catalog(
+                       titleid,name,link_enabled,covers_count,updates_count,media_id_count,
+                       user_count,source_url,raw_json,fetched_at)
+                   VALUES ('53510804','Hitman: Absolution',1,2,3,1,1,
+                           'http://xboxunity.net','{}','now')"""
+            )
+            connection.execute(
+                """INSERT INTO metadata_overrides(
+                       entity_type,identifier_type,identifier_value,property,value,notes,updated_at)
+                   VALUES ('game','titleid','53510804','publisher','Square Enix','reviewed','now')"""
+            )
+            connection.commit()
+
+        audit = LibraryIntelligenceService(self.db_path).audit()
+        self.assertEqual(audit["summary"]["titles"], 1)
+        self.assertTrue(any(row["kind"] == "missing-cover" for row in audit["issues"]))
+        report = PreservationReportService(self.db_path).export_html(
+            Path(self.temp_dir) / "report.html"
+        )
+        self.assertTrue(Path(report["path"]).is_file())
+        corrections = CorrectionPackageService(self.db_path).export(
+            Path(self.temp_dir) / "corrections.json"
+        )
+        self.assertEqual(corrections["corrections"], 1)
+        hardware = HardwareInventoryService(self.db_path)
+        hardware.save("Living room", motherboard="Trinity", dvd_drive="DG-16D4S")
+        self.assertEqual(hardware.list()[0]["motherboard"], "Trinity")
+
+        snapshot_path = Path(self.temp_dir) / "metadata.usmeta"
+        exported = MetadataSnapshotService(self.db_path).export(snapshot_path)
+        self.assertEqual(exported["catalog"], 1)
+        imported_db = Path(self.temp_dir) / "imported.db"
+        DatabaseManager(str(imported_db))
+        imported = MetadataSnapshotService(imported_db).import_snapshot(snapshot_path)
+        self.assertEqual(imported["catalog"], 1)
+        self.assertEqual(imported["facts"], 1)
+
+        api_scraper = Mock(db=Mock(db_path=self.db_path))
+        api_client = UnityScraperAPI(api_scraper).app.test_client()
+        self.assertEqual(api_client.get("/api/library/audit").status_code, 200)
+        self.assertEqual(api_client.post("/api/hardware", json={
+            "label": "Bench console", "motherboard": "Jasper"
+        }).status_code, 200)
+        api_report = Path(self.temp_dir) / "api-report.html"
+        self.assertEqual(api_client.post("/api/reports/preservation", json={
+            "destination": str(api_report)
+        }).status_code, 200)
+        self.assertTrue(api_report.is_file())
 
     def test_xex_execution_info_is_parsed(self):
         from backup_manager import inspect_xex
