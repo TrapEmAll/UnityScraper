@@ -1639,7 +1639,12 @@ class TestRoadmapFeatures(unittest.TestCase):
         result = launch_xenia(installation, game, fullscreen=True)
         self.assertEqual(result["pid"], 42)
         popen.assert_called_once_with(
-            [str(executable), str(game), "--fullscreen=true"], cwd=root
+            [
+                str(installation.executable),
+                str(game.resolve()),
+                "--fullscreen=true",
+            ],
+            cwd=installation.root,
         )
 
     def test_knowledge_priority_and_conflict_resolution_are_persistent(self):
