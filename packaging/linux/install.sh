@@ -13,8 +13,7 @@ mkdir -p "$APP_DIR" "$BIN_DIR" "$APPLICATIONS_DIR" "$ICON_DIR" "$METAINFO_DIR"
 
 install -m 0755 "$PACKAGE_DIR/unityscraper" "$APP_DIR/unityscraper"
 install -m 0755 "$PACKAGE_DIR/uninstall.sh" "$APP_DIR/uninstall.sh"
-install -m 0644 "$PACKAGE_DIR/README.md" "$PACKAGE_DIR/CHANGELOG.md" \
-    "$PACKAGE_DIR/LICENSE" "$APP_DIR/"
+install -m 0644 "$PACKAGE_DIR/"*.md "$PACKAGE_DIR/LICENSE" "$APP_DIR/"
 install -m 0644 "$PACKAGE_DIR/unityscraper.png" \
     "$ICON_DIR/io.github.trapemall.UnityScraper.png"
 install -m 0644 "$PACKAGE_DIR/io.github.trapemall.UnityScraper.metainfo.xml" \

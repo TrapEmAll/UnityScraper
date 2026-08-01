@@ -62,7 +62,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path package | Out-Null
-          Copy-Item dist\UnityScraper.exe, README.md, CHANGELOG.md, LICENSE, DOCS_INDEX.md, BACKUP_MANAGER.md, COLLECTION_INTELLIGENCE.md, CONSOLE_SYNC.md, KNOWLEDGE_SOURCES.md, LINUX.md, PLUGIN_API.md package\
+          Copy-Item dist\UnityScraper.exe, README.md, CHANGELOG.md, LICENSE, DOCS_INDEX.md, BACKUP_MANAGER.md, COLLECTION_INTELLIGENCE.md, COMMUNITY_HUB.md, CONSOLE_SYNC.md, KNOWLEDGE_SOURCES.md, LINUX.md, PLUGIN_API.md, PROFILE_INTELLIGENCE.md, PROFILES_AND_SAVES.md, SECURITY.md, THIRD_PARTY_NOTICES.md package\
           Compress-Archive -Path package\* -DestinationPath UnityScraper-Windows-x64.zip
           $hash = (Get-FileHash UnityScraper-Windows-x64.zip -Algorithm SHA256).Hash.ToLower()
           "$hash *UnityScraper-Windows-x64.zip" | Set-Content UnityScraper-Windows-x64.zip.sha256

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 def _now() -> str:
@@ -69,6 +69,7 @@ def ensure_application_schema(connection: sqlite3.Connection) -> int:
         (6, "profile and save management", _migration_profiles_and_saves),
         (7, "profile intelligence and knowledge controls", _migration_roadmap),
         (8, "community roadmap workspaces", _migration_community_roadmap),
+        (9, "hardening and plugin runtime", _migration_hardening),
     )
     for version, name, migration in migrations:
         if version in applied:
@@ -699,6 +700,41 @@ def _migration_community_roadmap(connection: sqlite3.Connection) -> None:
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL,
             updated_at TEXT NOT NULL
+        );
+        """
+    )
+
+
+def _migration_hardening(connection: sqlite3.Connection) -> None:
+    """Add runtime audits and reversible-action metadata."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS plugin_collection_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plugin_id TEXT NOT NULL,
+            titleid TEXT NOT NULL,
+            status TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            result_json TEXT,
+            error_message TEXT,
+            FOREIGN KEY(plugin_id) REFERENCES plugin_states(plugin_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_plugin_collection_runs_lookup
+            ON plugin_collection_runs(plugin_id, titleid, started_at);
+
+        CREATE TABLE IF NOT EXISTS dedup_recovery_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            action_id INTEGER NOT NULL UNIQUE,
+            original_path TEXT NOT NULL,
+            quarantine_path TEXT NOT NULL,
+            keeper_path TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            restored_at TEXT,
+            status TEXT NOT NULL DEFAULT 'quarantined',
+            FOREIGN KEY(action_id) REFERENCES dedup_actions(id)
         );
         """
     )

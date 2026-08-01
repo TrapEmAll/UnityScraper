@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Callable, Optional
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
-from app_paths import EXPORTS_DIR
+from app_paths import DATABASE_PATH, EXPORTS_DIR, PLUGINS_DIR
 from app_version import DISPLAY_VERSION
 
 if TYPE_CHECKING:
@@ -133,6 +133,81 @@ class UnityScraperAPI:
                     self._require_scraper().db.search_titleids(query)
                 )
             )
+
+        @self.app.get("/api/community/search")
+        def community_search():
+            from unified_search import UnifiedSearchService
+
+            query = request.args.get("q", "")[:200]
+            categories = tuple(
+                value.strip() for value in request.args.getlist("category") if value.strip()
+            )
+            limit = request.args.get("limit", default=100, type=int)
+            if len(query.strip()) < 2:
+                return jsonify({"error": "q must contain at least two characters"}), 400
+            if limit is None or limit < 1 or limit > 500:
+                return jsonify({"error": "limit must be between 1 and 500"}), 400
+            return self._execute(lambda: self._search_response(
+                UnifiedSearchService(self._database_path()).search(
+                    query, categories=categories, limit=limit
+                )
+            ))
+
+        @self.app.get("/api/preservation/dedup/actions")
+        def dedup_actions():
+            from community_services import PreservationPlanningService
+
+            plan_id = request.args.get("plan_id", type=int)
+            return self._execute(lambda: {
+                "actions": PreservationPlanningService(self._database_path()).list_dedup_actions(
+                    plan_id
+                )
+            })
+
+        @self.app.post("/api/preservation/dedup/preview")
+        def dedup_preview():
+            from community_services import PreservationPlanningService
+
+            payload = request.get_json(silent=True)
+            if not isinstance(payload, dict) or not isinstance(payload.get("root"), str):
+                return jsonify({"error": "A root directory is required"}), 400
+            return self._execute(
+                lambda: PreservationPlanningService(self._database_path()).create_dedup_plan(
+                    payload["root"]
+                )
+            )
+
+        @self.app.post("/api/preservation/dedup/<int:action_id>/apply")
+        def dedup_apply(action_id: int):
+            from community_services import PreservationPlanningService
+
+            payload = request.get_json(silent=True) or {}
+            mode = payload.get("mode", "quarantine") if isinstance(payload, dict) else ""
+            if mode not in {"quarantine", "hardlink"}:
+                return jsonify({"error": "mode must be quarantine or hardlink"}), 400
+            return self._execute(
+                lambda: PreservationPlanningService(self._database_path()).apply_dedup_action(
+                    action_id, mode
+                )
+            )
+
+        @self.app.post("/api/preservation/dedup/<int:action_id>/restore")
+        def dedup_restore(action_id: int):
+            from community_services import PreservationPlanningService
+
+            return self._execute(
+                lambda: PreservationPlanningService(self._database_path()).restore_dedup_action(
+                    action_id
+                )
+            )
+
+        @self.app.get("/api/plugins")
+        def plugins():
+            from community_services import PluginControlService
+
+            return self._execute(lambda: {
+                "plugins": PluginControlService(self._database_path()).discover(PLUGINS_DIR)
+            })
 
         @self.app.post("/api/metadata/<titleid>")
         def collect_metadata(titleid: str):
@@ -276,6 +351,11 @@ class UnityScraperAPI:
         if self.scraper is None:
             raise RuntimeError("Scraper not initialized")
         return self.scraper
+
+    def _database_path(self) -> Path:
+        if self.scraper is None:
+            return DATABASE_PATH
+        return Path(getattr(self.scraper.db, "db_path", DATABASE_PATH))
 
     def _titleid_or_error(self, titleid: str):
         if self.scraper is None:

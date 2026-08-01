@@ -27,9 +27,9 @@ or press `Ctrl+K` to focus unified search.
     archive export layouts plus checksum manifests.
 12. Multi-disc completeness audits based on scanned disc number and count.
 13. Duplicate previews using size grouping and SHA-256 verification.
-14. Recoverable duplicate actions that quarantine the original and can create
-    a verified hardlink only after a second hash check.
-15. Read-only FATX signature and mounted-storage audits.
+14. Selectable, recoverable duplicate actions that quarantine the original,
+    optionally create a verified hardlink, and restore from the interface.
+15. Read-only FATX partition geometry, Xbox 360 USB container, and mounted-storage audits.
 16. Original Xbox `default.xbe` discovery alongside Xbox 360 collections.
 17. Plugin discovery, checksums, permission display, enable/disable state, and
     bounded ZIP installation or update with rollback.
@@ -46,7 +46,8 @@ or press `Ctrl+K` to focus unified search.
 - Sync plans are previews until the user confirms queueing. Queued jobs still
   run through the normal transfer controls.
 - Duplicate cleanup never deletes the only retained copy. Quarantined files
-  remain under `.unityscraper-dedup-quarantine` for manual recovery.
+  remain under `.unityscraper-dedup-quarantine` and can be restored from the
+  Preservation tab after checksum and path validation.
 - FATX images are detected read-only. Raw-device and raw-image writes are not
   implemented.
 - Package workspaces and ownership changes are previews. CON/LIVE/PIRS rebuild,
@@ -64,6 +65,11 @@ previews, played titles, embedded images, save comparisons, artwork exports,
 disc audits, dedup plans, storage audits, original Xbox records, plugin state,
 recovery events, dashboard tests, and accessibility preferences. It is additive
 and preserves existing databases.
+
+Migration 9 adds plugin collection audits and duplicate-recovery records. Enabled
+plugins run during normal metadata collection only while their approved entrypoint
+checksum still matches. Long Community Hub operations run in a background worker;
+search results can be opened with Enter or a double-click.
 
 Imported ConsoleMods, XenonLibrary, Free60, Redump, and No-Intro information
 continues to retain source, revision, citation, licensing, and conflict data.

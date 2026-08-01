@@ -5,12 +5,16 @@ Allows custom metadata collectors and extensions
 
 import json
 import logging
+import hashlib
+import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Mapping
 import importlib.util
 import sys
+import threading
 
 logger = logging.getLogger(__name__)
 PLUGIN_API_VERSION = 1
@@ -47,6 +51,48 @@ class PluginManifest:
         return manifest
 
 
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def load_enabled_plugin_configuration(
+    db_path: str | Path, plugin_dir: str | Path
+) -> tuple[list[str], dict[str, str]]:
+    """Return enabled plugin IDs whose entrypoint still matches its trusted hash."""
+    database = Path(db_path)
+    root = Path(plugin_dir)
+    if not database.is_file() or not root.is_dir():
+        return [], {}
+    try:
+        with closing(sqlite3.connect(database)) as connection:
+            rows = connection.execute(
+                "SELECT plugin_id, trusted_sha256 FROM plugin_states WHERE enabled=1"
+            ).fetchall()
+    except sqlite3.Error:
+        return [], {}
+    enabled: list[str] = []
+    trusted: dict[str, str] = {}
+    for plugin_id, expected_hash in rows:
+        try:
+            manifest = PluginManifest.load(root / plugin_id / "plugin.json")
+            entry = root / plugin_id / manifest.entrypoint
+            actual_hash = file_sha256(entry)
+        except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+            logger.warning("Enabled plugin %s could not be validated: %s", plugin_id, exc)
+            continue
+        expected = str(expected_hash or "").casefold()
+        if manifest.plugin_id != plugin_id or not expected or actual_hash.casefold() != expected:
+            logger.warning("Enabled plugin %s changed after approval and was not loaded", plugin_id)
+            continue
+        enabled.append(plugin_id)
+        trusted[plugin_id] = actual_hash
+    return enabled, trusted
+
+
 class MetadataCollectorPlugin(ABC):
     """Base class for custom metadata collector plugins"""
     
@@ -78,12 +124,16 @@ class PluginManager:
         self,
         plugin_dir: str = "plugins",
         enabled_plugins: Optional[List[str]] = None,
+        trusted_hashes: Optional[Mapping[str, str]] = None,
         allow_legacy: bool = False,
     ):
         self.plugin_dir = Path(plugin_dir)
         self.plugins: Dict[str, MetadataCollectorPlugin] = {}
         self.manifests: Dict[str, PluginManifest] = {}
+        self.plugin_ids_by_name: Dict[str, str] = {}
+        self.plugin_locks: Dict[str, threading.Lock] = {}
         self.enabled_plugins = set(enabled_plugins or [])
+        self.trusted_hashes = dict(trusted_hashes or {})
         self.allow_legacy = allow_legacy
         self._load_plugins()
     
@@ -98,7 +148,11 @@ class PluginManager:
                 manifest = PluginManifest.load(manifest_path)
                 self.manifests[manifest.plugin_id] = manifest
                 if manifest.plugin_id in self.enabled_plugins:
-                    self._load_plugin_file(manifest_path.parent / manifest.entrypoint, manifest)
+                    entry = manifest_path.parent / manifest.entrypoint
+                    expected = self.trusted_hashes.get(manifest.plugin_id)
+                    if not expected or file_sha256(entry).casefold() != expected.casefold():
+                        raise ValueError("Plugin entrypoint does not match its approved checksum")
+                    self._load_plugin_file(entry, manifest)
             except Exception as e:
                 logger.warning(f"Failed to load plugin {manifest_path}: {e}")
         if self.allow_legacy:
@@ -110,10 +164,14 @@ class PluginManager:
         self, file_path: Path, manifest: Optional[PluginManifest] = None
     ):
         """Load a single plugin file"""
-        spec = importlib.util.spec_from_file_location(file_path.stem, file_path)
+        module_name = (
+            "unityscraper_plugin_" + manifest.plugin_id.replace(".", "_").replace("-", "_")
+            if manifest else file_path.stem
+        )
+        spec = importlib.util.spec_from_file_location(module_name, file_path)
         if spec and spec.loader:
             module = importlib.util.module_from_spec(spec)
-            sys.modules[file_path.stem] = module
+            sys.modules[module_name] = module
             spec.loader.exec_module(module)
             
             # Find and register MetadataCollectorPlugin subclasses
@@ -127,7 +185,9 @@ class PluginManager:
                     if manifest:
                         instance.name = manifest.name
                         instance.version = manifest.version
+                        self.plugin_ids_by_name[instance.name] = manifest.plugin_id
                     self.plugins[instance.name] = instance
+                    self.plugin_locks[instance.name] = threading.Lock()
                     logger.info(f"Loaded plugin: {instance.name} v{instance.version}")
     
     def get_plugin(self, name: str) -> Optional[MetadataCollectorPlugin]:
@@ -169,6 +229,32 @@ class PluginManager:
         except Exception as e:
             logger.error(f"Plugin {plugin_name} failed: {e}")
             return None
+
+    def collect_enabled(self, titleid: str) -> List[Dict[str, Any]]:
+        """Run enabled collectors independently and retain success/failure details."""
+        results: List[Dict[str, Any]] = []
+        for name, plugin in self.plugins.items():
+            plugin_id = self.plugin_ids_by_name.get(name, name)
+            try:
+                with self.plugin_locks[name]:
+                    if not plugin.validate_titleid(titleid):
+                        results.append({"plugin_id": plugin_id, "name": name,
+                                        "status": "skipped"})
+                        continue
+                    data = plugin.collect(titleid)
+                if not isinstance(data, dict):
+                    raise TypeError("Plugin collect() must return a dictionary")
+                encoded = json.dumps(data, default=str)
+                if len(encoded.encode("utf-8")) > 2 * 1024 * 1024:
+                    raise ValueError("Plugin result exceeds the 2 MiB safety limit")
+            except Exception as exc:
+                logger.exception("Plugin %s failed for %s", plugin_id, titleid)
+                results.append({"plugin_id": plugin_id, "name": name,
+                                "status": "failed", "error": str(exc)})
+            else:
+                results.append({"plugin_id": plugin_id, "name": name,
+                                "status": "completed", "data": data})
+        return results
 
 
 # Example plugin template (to be saved in plugins/example.py)
