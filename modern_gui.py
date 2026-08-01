@@ -1100,10 +1100,39 @@ class UnityScraperDesktop:
     def show_community_hub(self, focus_search: bool = False) -> None:
         self._clear_content()
         self.community_hub_page = CommunityHubPage(
-            self.root, self.content, self._page_header
+            self.root, self.content, self._page_header, self._navigate_search_result
         )
         if focus_search:
             self.root.after_idle(self.community_hub_page.focus_search)
+
+    def _navigate_search_result(self, result: dict[str, Any]) -> None:
+        """Open a unified-search result in its closest native workspace."""
+        category = str(result.get("category", "")).casefold()
+        target = str(result.get("target", ""))
+        identifier = str(result.get("identifier", ""))
+        if category == "game":
+            self.current_game = identifier
+            self.show_library()
+            return
+        if target.startswith("file:"):
+            path = Path(target.removeprefix("file:"))
+            _open_path(path.parent if path.is_file() else path)
+            return
+        if category in {"profile", "save", "achievement"}:
+            self.show_profiles()
+            self.profile_save_page.search_var.set(result.get("title", identifier))
+            self.profile_save_page.refresh()
+            return
+        if category == "knowledge":
+            self.show_knowledge()
+            self.knowledge_page.search_var.set(result.get("title", ""))
+            self.knowledge_page.refresh_results()
+            return
+        if target.startswith("structured:"):
+            hub = self.community_hub_page
+            hub.notebook.select(1)
+            hub.knowledge_type.set(category)
+            hub._refresh_knowledge()
 
     def show_health(self) -> None:
         self._clear_content()

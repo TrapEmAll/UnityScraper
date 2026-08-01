@@ -7,6 +7,16 @@ Notable changes to UnityScraper are documented here. The project follows
 
 ### Added
 
+- Additive schema migration 9 for plugin collection audits and reversible
+  duplicate recovery records.
+- Runtime plugin loading with approved-checksum enforcement, bounded results,
+  per-plugin failure isolation, provenance, and unknown-only enrichment.
+- Background Community Hub operations, actionable unified-search results, and
+  selectable duplicate apply/restore controls.
+- Unified-search and preservation API/CLI operations.
+- Read-only FATX partition geometry and Xbox 360 USB-container reporting.
+- Bounded read-only STFS file-table inventory in package workspaces.
+
 - Community Hub with unified local search across games, source knowledge,
   profiles, saves, achievements, files, and structured records.
 - Additive schema migration 8 for structured knowledge, guided console plans,

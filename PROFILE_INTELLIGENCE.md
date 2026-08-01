@@ -21,9 +21,9 @@ For game GPDs, the application displays achievement ID, title, gamerscore,
 locked/unlocked state, and a valid online unlock timestamp when present. It
 also records totals for unlocked achievements and earned/possible gamerscore.
 
-The parser never writes to the source file. It does not unlock achievements,
-alter sync records, extract images, edit account settings, or repair malformed
-databases.
+The parser never writes to the source file. It can validate and export a selected
+embedded PNG/JPEG image to a new file, but it does not unlock achievements,
+alter sync records, edit account settings, or repair malformed databases.
 
 UnityScraper currently reads standalone or extracted GPD files. It does not
 silently unpack or rewrite the profile's STFS container.

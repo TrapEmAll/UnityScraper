@@ -24,11 +24,13 @@ from app_paths import (
     CLI_LOG_PATH,
     CONFIG_PATH,
     DOWNLOADS_DIR,
+    PLUGINS_DIR,
     ensure_app_dirs,
     ensure_user_titleids_file,
 )
 from database import DatabaseManager
-from plugins import PluginManager
+from knowledge_base import is_unknown
+from plugins import PluginManager, load_enabled_plugin_configuration
 from resume import ResumableDownloader
 
 logger = logging.getLogger(__name__)
@@ -155,12 +157,20 @@ class UnityScraper:
         self,
         config: Config,
         database: Optional[DatabaseManager] = None,
+        plugin_manager: Optional[PluginManager] = None,
     ):
         self.config = config
         self.rate_limiter = RateLimiter(config.rate_limit)
         self.session = self._create_session()
         self.db = database or DatabaseManager()
-        self.plugin_manager = PluginManager()  # Initialize plugin system
+        if plugin_manager is None:
+            enabled, trusted = load_enabled_plugin_configuration(
+                self.db.db_path, PLUGINS_DIR
+            )
+            plugin_manager = PluginManager(
+                str(PLUGINS_DIR), enabled_plugins=enabled, trusted_hashes=trusted
+            )
+        self.plugin_manager = plugin_manager
         self.downloader = ResumableDownloader(self.session, config.timeout, config.bandwidth_limit)
         self._test_connection()
     
@@ -416,12 +426,121 @@ class UnityScraper:
         # Batch insert updates
         if updates_batch:
             self.db.batch_insert_updates(updates_batch)
+
+        self._collect_plugin_metadata(validated_titleid)
         
         # Update database with scrape info
         self.db.update_scrape_info(validated_titleid)
         
         logger.info(f"[OK] Collected metadata for TitleID: {titleid}")
         return True
+
+    def _collect_plugin_metadata(self, titleid: str) -> None:
+        """Run explicitly enabled plugins and store bounded, source-labelled results."""
+        for result in self.plugin_manager.collect_enabled(titleid):
+            plugin_id = str(result["plugin_id"])
+            now = datetime.now().isoformat()
+            status = str(result["status"])
+            data = result.get("data") if status == "completed" else None
+            error = str(result.get("error") or "")
+            try:
+                if isinstance(data, dict):
+                    self._store_plugin_metadata(titleid, plugin_id, data)
+            except Exception as exc:
+                status = "failed"
+                error = str(exc)
+                logger.exception("Could not store plugin result from %s", plugin_id)
+            with self.db.get_connection() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO plugin_collection_runs(
+                        plugin_id, titleid, status, started_at, completed_at,
+                        result_json, error_message
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        plugin_id, titleid, status, now, datetime.now().isoformat(),
+                        json.dumps(data, sort_keys=True, default=str) if data is not None else None,
+                        error or None,
+                    ),
+                )
+
+    def _store_plugin_metadata(
+        self, titleid: str, plugin_id: str, data: Dict[str, Any]
+    ) -> None:
+        title = str(data.get("title") or data.get("name") or "").strip()[:500]
+        publisher = str(data.get("publisher") or "").strip()[:500]
+        with self.db.get_connection() as connection:
+            row = connection.execute(
+                "SELECT name, publisher, metadata FROM titleids WHERE titleid=?", (titleid,)
+            ).fetchone()
+            metadata: Dict[str, Any] = {}
+            if row and row["metadata"]:
+                try:
+                    metadata = json.loads(row["metadata"])
+                except json.JSONDecodeError:
+                    metadata = {}
+            current_name = row["name"] if row else None
+            current_publisher = row["publisher"] if row else None
+            if title and is_unknown(current_name):
+                current_name = title
+                metadata["title_source"] = f"Plugin: {plugin_id}"
+            if publisher and is_unknown(current_publisher):
+                current_publisher = publisher
+                metadata["publisher_source"] = f"Plugin: {plugin_id}"
+            plugin_sources = metadata.get("plugin_sources")
+            if not isinstance(plugin_sources, dict):
+                plugin_sources = {}
+                metadata["plugin_sources"] = plugin_sources
+            plugin_sources[plugin_id] = datetime.now().isoformat()
+            connection.execute(
+                "UPDATE titleids SET name=?, publisher=?, metadata=? WHERE titleid=?",
+                (current_name, current_publisher, json.dumps(metadata, sort_keys=True), titleid),
+            )
+            self.db._update_search_index(
+                connection, titleid, current_name, current_publisher, metadata
+            )
+
+        cover_items = data.get("covers", [])
+        if not isinstance(cover_items, list):
+            raise TypeError("Plugin covers must be a list")
+        covers = []
+        for item in cover_items[:200]:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("cover_url") or item.get("url") or "").strip()
+            if urlparse(url).scheme not in {"http", "https"}:
+                continue
+            covers.append({
+                "titleid": titleid,
+                "cover_url": url,
+                "cover_type": str(item.get("cover_type") or item.get("type") or "plugin")[:100],
+                "status": "pending",
+                "metadata": {**item, "plugin_id": plugin_id},
+            })
+        if covers:
+            self.db.batch_insert_covers(covers)
+
+        update_items = data.get("updates", [])
+        if not isinstance(update_items, list):
+            raise TypeError("Plugin updates must be a list")
+        updates = []
+        for item in update_items[:500]:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("download_url") or item.get("url") or "").strip()
+            if urlparse(url).scheme not in {"http", "https"}:
+                continue
+            updates.append({
+                "titleid": titleid,
+                "media_id": str(item.get("media_id") or item.get("MediaID") or "")[:100],
+                "version": str(item.get("version") or item.get("Version") or "unknown")[:100],
+                "download_url": url,
+                "status": "pending",
+                "metadata": {**item, "plugin_id": plugin_id},
+            })
+        if updates:
+            self.db.batch_insert_updates(updates)
     
     def process_titleid(self, titleid: str) -> bool:
         """Process a single TitleID - download covers and updates"""
@@ -449,6 +568,10 @@ class UnityScraper:
             with open(output_dir / 'updates_data.json', 'w') as f:
                 json.dump(updates_data, f, indent=2)
             self._download_updates(validated_titleid, updates_data, output_dir)
+
+        self.db.add_titleid(validated_titleid)
+        self._collect_plugin_metadata(validated_titleid)
+        self.db.update_scrape_info(validated_titleid)
         
         logger.info(f"[OK] Completed downloads for TitleID: {titleid}")
         return True
@@ -822,6 +945,22 @@ def main():
         choices=['redump', 'no-intro'],
         help='Source type for --import-dat'
     )
+    parser.add_argument('--search-all', type=str,
+                        help='Search games, knowledge, profiles, saves, files, and tools')
+    parser.add_argument('--extract-knowledge', action='store_true',
+                        help='Extract structured records from locally cached wiki documents')
+    parser.add_argument('--audit-storage', type=str,
+                        help='Inspect a mounted storage path or image read-only')
+    parser.add_argument('--scan-original-xbox', type=str,
+                        help='Index original Xbox default.xbe files below a folder')
+    parser.add_argument('--dedup-preview', type=str,
+                        help='Create a checksum-based duplicate preview for a folder')
+    parser.add_argument('--dedup-apply', type=int,
+                        help='Apply one previewed duplicate action by ID')
+    parser.add_argument('--dedup-restore', type=int,
+                        help='Restore one quarantined duplicate action by ID')
+    parser.add_argument('--dedup-mode', choices=['quarantine', 'hardlink'],
+                        default='quarantine', help='Action used with --dedup-apply')
     parser.add_argument(
         '--scan-backups',
         type=str,
@@ -1010,6 +1149,51 @@ def main():
             sys.exit(0)
         except Exception as e:
             logger.error(f"DAT import failed: {e}")
+            sys.exit(1)
+
+    if (
+        args.search_all
+        or args.extract_knowledge
+        or args.audit_storage
+        or args.scan_original_xbox
+        or args.dedup_preview
+        or args.dedup_apply is not None
+        or args.dedup_restore is not None
+    ):
+        try:
+            from community_services import PreservationPlanningService, StorageAndXboxService
+            from structured_knowledge import StructuredKnowledgeService
+            from unified_search import UnifiedSearchService
+
+            results: Dict[str, Any] = {}
+            if args.search_all:
+                results["search"] = UnifiedSearchService().search(args.search_all)
+            if args.extract_knowledge:
+                results["knowledge"] = StructuredKnowledgeService().extract_cached_documents()
+            if args.audit_storage:
+                results["storage"] = StorageAndXboxService().audit_storage(args.audit_storage)
+            if args.scan_original_xbox:
+                results["original_xbox"] = StorageAndXboxService().scan_original_xbox(
+                    args.scan_original_xbox
+                )
+            preservation = PreservationPlanningService()
+            if args.dedup_preview:
+                results["dedup_preview"] = preservation.create_dedup_plan(args.dedup_preview)
+                results["dedup_actions"] = preservation.list_dedup_actions(
+                    results["dedup_preview"]["plan_id"]
+                )
+            if args.dedup_apply is not None:
+                results["dedup_apply"] = preservation.apply_dedup_action(
+                    args.dedup_apply, args.dedup_mode
+                )
+            if args.dedup_restore is not None:
+                results["dedup_restore"] = preservation.restore_dedup_action(
+                    args.dedup_restore
+                )
+            print(json.dumps(results, indent=2, default=str))
+            sys.exit(0)
+        except Exception as e:
+            logger.error("Community operation failed: %s", e)
             sys.exit(1)
 
     if (

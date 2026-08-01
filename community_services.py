@@ -18,7 +18,7 @@ from typing import Any, Iterable
 from PIL import Image
 
 from app_paths import DATABASE_PATH
-from backup_manager import FtpTarget, inspect_stfs, inspect_xbe
+from backup_manager import FtpTarget, inspect_stfs, inspect_xbe, list_stfs_entries
 from console_sync import ConsoleSyncService
 from database_migrations import ensure_application_schema
 from plugins import PluginManifest
@@ -173,6 +173,31 @@ class ConsolePlanService(CommunityRepository):
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def list_snapshots(self) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT s.*, COUNT(i.id) item_count
+                FROM console_inventory_snapshots s
+                LEFT JOIN console_inventory_items i ON i.snapshot_id=s.id
+                WHERE s.status='completed'
+                GROUP BY s.id ORDER BY s.captured_at DESC
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_ftp_targets(self) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            exists = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='backup_targets'"
+            ).fetchone()
+            if exists is None:
+                return []
+            rows = connection.execute(
+                "SELECT id, name, location FROM backup_targets WHERE kind='ftp' ORDER BY name"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def queue_uploads(self, plan_id: int, target_id: int | None = None) -> dict[str, Any]:
         """Queue selected upload actions after revalidating their local files."""
         with self.connect() as connection:
@@ -233,10 +258,18 @@ class PackageWorkspaceService(CommunityRepository):
         result = asdict(package)
         result["path"] = str(package.path)
         result["sha256"] = _sha256(package.path)
+        try:
+            entries = list_stfs_entries(package.path)
+        except Exception as exc:
+            result["file_table"] = []
+            result["file_table_status"] = f"unavailable: {exc}"
+        else:
+            result["file_table"] = [asdict(entry) for entry in entries]
+            result["file_table_status"] = "read-only bounded inventory"
         result["mutation_ready"] = False
         result["required_before_rebuild"] = [
-            "complete file-table extraction", "block/hash tree verification",
-            "rehash", "signature", "post-build verification",
+            "complete extraction and block/hash tree verification", "rehash", "signature",
+            "post-build verification",
         ]
         return result
 
@@ -453,17 +486,113 @@ class PreservationPlanningService(CommunityRepository):
         except Exception:
             quarantined.replace(duplicate)
             raise
-        with self.connect() as connection:
-            connection.execute(
-                "UPDATE dedup_actions SET action=?, status='completed' WHERE id=?",
-                (mode, action_id),
-            )
+        try:
+            with self.connect() as connection:
+                connection.execute(
+                    "UPDATE dedup_actions SET action=?, status='completed' WHERE id=?",
+                    (mode, action_id),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO dedup_recovery_records(
+                        action_id, original_path, quarantine_path, keeper_path,
+                        mode, sha256, created_at, status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'quarantined')
+                    """,
+                    (action_id, str(duplicate), str(quarantined), str(keeper),
+                     mode, expected, utc_now()),
+                )
+        except Exception:
+            if mode == "hardlink" and duplicate.exists():
+                duplicate.unlink()
+            if quarantined.exists() and not duplicate.exists():
+                quarantined.replace(duplicate)
+            raise
         return {"action_id": action_id, "mode": mode, "keeper": str(keeper),
                 "duplicate": str(duplicate), "quarantine": str(quarantined)}
 
+    def list_dedup_actions(self, plan_id: int | None = None) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            selected = plan_id
+            if selected is None:
+                row = connection.execute(
+                    "SELECT id FROM dedup_plans ORDER BY id DESC LIMIT 1"
+                ).fetchone()
+                if row is None:
+                    return []
+                selected = int(row["id"])
+            rows = connection.execute(
+                """
+                SELECT a.*, r.status recovery_status
+                FROM dedup_actions a
+                LEFT JOIN dedup_recovery_records r ON r.action_id=a.id
+                WHERE a.plan_id=? ORDER BY a.size DESC, a.id
+                """,
+                (selected,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def restore_dedup_action(self, action_id: int) -> dict[str, Any]:
+        """Restore a quarantined duplicate after validating every involved path."""
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT r.*, p.root FROM dedup_recovery_records r
+                JOIN dedup_actions a ON a.id=r.action_id
+                JOIN dedup_plans p ON p.id=a.plan_id
+                WHERE r.action_id=?
+                """,
+                (action_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(action_id)
+        if row["status"] != "quarantined":
+            raise ValueError("This duplicate is not waiting in recovery quarantine")
+        root = Path(row["root"]).resolve()
+        original = Path(row["original_path"]).resolve()
+        quarantine = Path(row["quarantine_path"]).resolve()
+        keeper = Path(row["keeper_path"]).resolve()
+        original.relative_to(root)
+        quarantine.relative_to(root)
+        keeper.relative_to(root)
+        expected = row["sha256"]
+        if not quarantine.is_file() or _sha256(quarantine) != expected:
+            raise ValueError("The quarantined file is missing or changed")
+        if original.exists():
+            if row["mode"] != "hardlink":
+                raise FileExistsError(original)
+            if not original.is_file() or _sha256(original) != expected:
+                raise ValueError("The replacement file changed; restore was refused")
+            try:
+                if not original.samefile(keeper):
+                    raise ValueError("The replacement is not the expected hardlink")
+            except OSError as exc:
+                raise ValueError("The replacement hardlink could not be verified") from exc
+            original.unlink()
+        original.parent.mkdir(parents=True, exist_ok=True)
+        quarantine.replace(original)
+        try:
+            with self.connect() as connection:
+                connection.execute(
+                    """UPDATE dedup_recovery_records
+                       SET status='restored', restored_at=? WHERE action_id=?""",
+                    (utc_now(), action_id),
+                )
+                connection.execute(
+                    "UPDATE dedup_actions SET status='restored' WHERE id=?",
+                    (action_id,),
+                )
+        except Exception:
+            original.replace(quarantine)
+            if row["mode"] == "hardlink":
+                original.hardlink_to(keeper)
+            raise
+        return {"action_id": action_id, "restored": str(original)}
+
 
 class StorageAndXboxService(CommunityRepository):
-    FATX_OFFSETS = (0, 0x80000, 0x130EB0000, 0x20000000)
+    FATX_OFFSETS = (0, 0x7FF000, 0x10C080000, 0x118EB0000, 0x120EB0000,
+                    0x130EB0000, 0x8000400, 0x8115200, 0x12000400, 0x20000000)
 
     def audit_storage(self, source_path: str | Path) -> dict[str, Any]:
         source = Path(source_path).expanduser().resolve()
@@ -471,16 +600,46 @@ class StorageAndXboxService(CommunityRepository):
             raise FileNotFoundError(source)
         filesystem = "mounted-filesystem" if source.is_dir() else "unknown-image"
         details: dict[str, Any] = {"size": source.stat().st_size}
+        if source.is_dir():
+            usb_parts = sorted(
+                path for path in (source / "Xbox360").glob("Data[0-9][0-9][0-9][0-9]")
+                if path.is_file()
+            )
+            if usb_parts:
+                filesystem = "Xbox 360 USB container"
+                details["container_parts"] = len(usb_parts)
+                details["container_size"] = sum(path.stat().st_size for path in usb_parts)
+                details["container_files"] = [path.name for path in usb_parts]
         if source.is_file():
+            partitions = []
+            source_size = source.stat().st_size
             with source.open("rb") as handle:
                 for offset in self.FATX_OFFSETS:
-                    if offset + 4 > source.stat().st_size:
+                    if offset + 16 > source_size:
                         continue
                     handle.seek(offset)
-                    if handle.read(4) == b"XTAF":
-                        filesystem = "FATX"
-                        details["signature_offset"] = offset
-                        break
+                    header = handle.read(16)
+                    if header[:4] != b"XTAF":
+                        continue
+                    sectors_per_cluster = int.from_bytes(header[8:12], "big")
+                    root_cluster = int.from_bytes(header[12:16], "big")
+                    valid_cluster = (
+                        sectors_per_cluster > 0
+                        and sectors_per_cluster <= 0x10000
+                        and sectors_per_cluster & (sectors_per_cluster - 1) == 0
+                    )
+                    partitions.append({
+                        "offset": offset,
+                        "partition_id": f"{int.from_bytes(header[4:8], 'big'):08X}",
+                        "sectors_per_cluster": sectors_per_cluster,
+                        "cluster_size": sectors_per_cluster * 512,
+                        "root_directory_cluster": root_cluster,
+                        "header_valid": valid_cluster and root_cluster > 0,
+                    })
+            if partitions:
+                filesystem = "FATX"
+                details["partitions"] = partitions
+                details["signature_offset"] = partitions[0]["offset"]
         status = "recognized" if filesystem != "unknown-image" else "unrecognized"
         with self.connect() as connection:
             cursor = connection.execute(
@@ -505,19 +664,34 @@ class StorageAndXboxService(CommunityRepository):
                     package = inspect_xbe(path)
                 except (OSError, ValueError):
                     continue
-                item = {"titleid": package.title_id, "title_name": package.title_name,
-                        "xbe_path": str(package.path), "size": package.size}
+                region_names = [
+                    name for flag, name in (
+                        (0x1, "North America"), (0x2, "Japan"),
+                        (0x4, "Rest of World"), (0x80000000, "Manufacturing"),
+                    ) if package.region_flags & flag
+                ]
+                regions = ", ".join(region_names) or "Unknown"
+                item = {
+                    "titleid": package.title_id, "title_name": package.title_name,
+                    "xbe_path": str(package.path), "size": package.size,
+                    "region_flags": f"0x{package.region_flags:08X}",
+                    "regions": region_names, "version": package.version,
+                    "disc_number": package.disc_number,
+                    "allowed_media": f"0x{package.allowed_media:08X}",
+                }
                 connection.execute(
                     """
                     INSERT INTO original_xbox_records(
-                        titleid, title_name, xbe_path, metadata_json, scanned_at
-                    ) VALUES (?, ?, ?, ?, ?)
+                        titleid, title_name, xbe_path, region_flags, version,
+                        metadata_json, scanned_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(xbe_path) DO UPDATE SET titleid=excluded.titleid,
-                        title_name=excluded.title_name, metadata_json=excluded.metadata_json,
+                        title_name=excluded.title_name, region_flags=excluded.region_flags,
+                        version=excluded.version, metadata_json=excluded.metadata_json,
                         scanned_at=excluded.scanned_at
                     """,
-                    (package.title_id, package.title_name, str(package.path),
-                     json.dumps(item, sort_keys=True), utc_now()),
+                    (package.title_id, package.title_name, str(package.path), regions,
+                     str(package.version), json.dumps(item, sort_keys=True), utc_now()),
                 )
                 records.append(item)
         return records

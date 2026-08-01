@@ -61,6 +61,11 @@ backup-management, and source-attributed knowledge application.
   recoverable deduplication, storage audits, original Xbox discovery, plugin
   controls, recovery actions, dashboard probes, and accessibility preferences.
 - Additive schema migration 8 and local audit history for every new workspace.
+- Additive schema migration 9 for audited plugin collection and reversible
+  duplicate actions, plus selectable restore controls.
+- Background Community Hub jobs, actionable unified-search navigation, CLI/API
+  parity for search and preservation, FATX geometry reports, and bounded STFS
+  file-table inventory.
 - Windows, Linux, and unsigned Apple Silicon macOS CI packaging.
 
 ## Validation
@@ -93,7 +98,8 @@ backup-management, and source-attributed knowledge application.
   re-signing remain disabled until complete package verification and reliable
   cross-platform signing support are available.
 - FATX and raw-device access remains read-only. Duplicate actions retain a
-  quarantine copy, and console plans require explicit queue confirmation.
+  tracked quarantine copy with validated restoration, and console plans require
+  explicit queue confirmation.
 
 ## Future Work
 

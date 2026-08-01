@@ -50,6 +50,7 @@ from backup_manager import (
     import_stfs_zip,
     inspect_stfs,
     inspect_xbe,
+    list_stfs_entries,
     package_destination,
     scan_local_target,
 )
@@ -1123,6 +1124,31 @@ class TestBackupManager(unittest.TestCase):
         self.assertEqual(package.device_id, "11" * 20)
         self.assertEqual(package.save_game_id, "12345678")
 
+    def test_stfs_file_table_is_inventoried_read_only(self):
+        payload = bytearray(0xC000)
+        payload[:4] = b"LIVE"
+        payload[0x340:0x344] = (0xA000).to_bytes(4, "big")
+        payload[0x344:0x348] = (1).to_bytes(4, "big")
+        payload[0x360:0x364] = bytes.fromhex("53510804")
+        payload[0x379] = 0x24
+        payload[0x37B] = 1
+        payload[0x37C:0x37E] = (1).to_bytes(2, "big")
+        name = b"savegame.dat"
+        entry = 0xB000
+        payload[entry:entry + len(name)] = name
+        payload[entry + 0x28] = len(name) | 0x40
+        payload[entry + 0x29:entry + 0x2C] = (1).to_bytes(3, "little")
+        payload[entry + 0x2F:entry + 0x32] = (1).to_bytes(3, "little")
+        payload[entry + 0x32:entry + 0x34] = (0xFFFF).to_bytes(2, "big")
+        payload[entry + 0x34:entry + 0x38] = (123).to_bytes(4, "big")
+        package_path = self.temp_dir / "listing.stfs"
+        package_path.write_bytes(payload)
+
+        entries = list_stfs_entries(package_path)
+        self.assertEqual(entries[0].path, "savegame.dat")
+        self.assertEqual(entries[0].size, 123)
+        self.assertTrue(entries[0].consecutive)
+
     def test_rejects_unknown_stfs_content_type(self):
         with self.assertRaises(InvalidPackageError):
             inspect_stfs(self._stfs(content_type=0xDEADBEEF))
@@ -1215,10 +1241,22 @@ class TestBackupManager(unittest.TestCase):
         title = "Original Game".encode("utf-16-le")
         start = certificate_offset + 0xC
         data[start:start + len(title)] = title
+        data[certificate_offset + 0x9C:certificate_offset + 0xA0] = (0x21).to_bytes(
+            4, "little"
+        )
+        data[certificate_offset + 0xA0:certificate_offset + 0xA4] = (0x5).to_bytes(
+            4, "little"
+        )
+        data[certificate_offset + 0xA8:certificate_offset + 0xAC] = (2).to_bytes(4, "little")
+        data[certificate_offset + 0xAC:certificate_offset + 0xB0] = (7).to_bytes(4, "little")
         path.write_bytes(data)
         package = inspect_xbe(path)
         self.assertEqual(package.title_id, "4D530064")
         self.assertEqual(package.title_name, "Original Game")
+        self.assertEqual(package.allowed_media, 0x21)
+        self.assertEqual(package.region_flags, 0x5)
+        self.assertEqual(package.disc_number, 2)
+        self.assertEqual(package.version, 7)
 
     def test_backup_schema_is_additive_and_omits_passwords(self):
         repository = BackupRepository(self.temp_dir / "backup.db")
@@ -1648,7 +1686,7 @@ class TestUnifiedV1Foundation(unittest.TestCase):
             versions = connection.execute(
                 "SELECT version FROM app_schema_migrations ORDER BY version"
             ).fetchall()
-        self.assertEqual([row[0] for row in versions], [1, 2, 3, 4, 5, 6, 7, 8])
+        self.assertEqual([row[0] for row in versions], [1, 2, 3, 4, 5, 6, 7, 8, 9])
         self.assertIn("collection_snapshots", tables)
         self.assertIn("preservation_matches", tables)
         self.assertIn("console_transfer_jobs", tables)
@@ -1663,6 +1701,8 @@ class TestUnifiedV1Foundation(unittest.TestCase):
         self.assertIn("xenia_migration_runs", tables)
         self.assertIn("knowledge_source_priorities", tables)
         self.assertIn("scheduled_sync_state", tables)
+        self.assertIn("plugin_collection_runs", tables)
+        self.assertIn("dedup_recovery_records", tables)
 
     def test_xex_execution_info_is_parsed(self):
         from backup_manager import inspect_xex
@@ -1781,6 +1821,13 @@ class TestCommunityRoadmap(unittest.TestCase):
         self.assertEqual(service.search("Hitman")[0]["identifier"], "53510804")
         self.assertEqual(service.search("Agent47")[0]["category"], "profile")
 
+        api_scraper = Mock(db=self.database)
+        response = UnityScraperAPI(api_scraper).app.test_client().get(
+            "/api/community/search?q=Hitman"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["results"][0]["identifier"], "53510804")
+
     def test_structured_knowledge_extracts_cached_hardware_article(self):
         import sqlite3
         from contextlib import closing
@@ -1851,6 +1898,7 @@ class TestCommunityRoadmap(unittest.TestCase):
             connection.commit()
             snapshot_id = snapshot.lastrowid
         service = ConsolePlanService(self.db_path)
+        self.assertEqual(service.list_snapshots()[0]["id"], snapshot_id)
         plan = service.create_plan(local, snapshot_id)
         self.assertEqual(plan["summary"]["uploads"], 1)
         self.assertTrue(any(item["action"] == "review_remote" for item in plan["actions"]))
@@ -1890,12 +1938,20 @@ class TestCommunityRoadmap(unittest.TestCase):
         applied = PreservationPlanningService(self.db_path).apply_dedup_action(action_id)
         self.assertTrue(Path(applied["quarantine"]).is_file())
         self.assertFalse(Path(applied["duplicate"]).exists())
+        restored = PreservationPlanningService(self.db_path).restore_dedup_action(action_id)
+        self.assertEqual(Path(restored["restored"]).read_bytes(), b"same")
+        self.assertFalse(Path(applied["quarantine"]).exists())
 
         fatx = self.temp_dir / "drive.img"
-        fatx.write_bytes(b"XTAF" + bytes(64))
+        fatx.write_bytes(
+            b"XTAF" + bytes.fromhex("12345678")
+            + (8).to_bytes(4, "big") + (1).to_bytes(4, "big") + bytes(52)
+        )
         audit = StorageAndXboxService(self.db_path).audit_storage(fatx)
         self.assertEqual(audit["filesystem"], "FATX")
         self.assertEqual(audit["access_mode"], "read-only")
+        self.assertEqual(audit["details"]["partitions"][0]["cluster_size"], 4096)
+        self.assertTrue(audit["details"]["partitions"][0]["header_valid"])
 
     def test_plugin_recovery_and_accessibility_controls(self):
         from community_services import AccessibilityService, PluginControlService, RecoveryService
@@ -1928,6 +1984,44 @@ class TestCommunityRoadmap(unittest.TestCase):
         self.assertTrue(access.get()["large_text"])
         self.assertTrue(access.get()["high_contrast"])
         self.assertTrue(access.get()["reduced_motion"])
+
+    def test_enabled_plugin_requires_approved_checksum_and_enriches_unknowns(self):
+        from community_services import PluginControlService
+        from plugins import PluginManager, load_enabled_plugin_configuration
+
+        plugin = self.temp_dir / "plugins" / "catalog"
+        plugin.mkdir(parents=True)
+        entry = plugin / "collector.py"
+        entry.write_text(
+            "from plugins import MetadataCollectorPlugin\n"
+            "class Catalog(MetadataCollectorPlugin):\n"
+            "    def validate_titleid(self, titleid): return True\n"
+            "    def collect(self, titleid):\n"
+            "        return {'title': 'Fallback Name', 'publisher': 'Fallback Publisher'}\n",
+            encoding="utf-8",
+        )
+        (plugin / "plugin.json").write_text(json.dumps({
+            "id": "catalog", "name": "Catalog", "version": "1.0",
+            "api_version": 1, "entrypoint": "collector.py", "permissions": ["metadata"],
+        }), encoding="utf-8")
+        PluginControlService(self.db_path).set_state("catalog", True, entry, ["metadata"])
+        enabled, trusted = load_enabled_plugin_configuration(self.db_path, plugin.parent)
+        manager = PluginManager(str(plugin.parent), enabled_plugins=enabled,
+                                trusted_hashes=trusted)
+        self.assertEqual(manager.collect_enabled("53510804")[0]["status"], "completed")
+
+        self.database.add_titleid("53510804", "Hitman: Absolution", "Unknown")
+        scraper = UnityScraper.__new__(UnityScraper)
+        scraper.db = self.database
+        scraper.plugin_manager = manager
+        scraper._collect_plugin_metadata("53510804")
+        title = self.database.get_titleid_info("53510804")
+        self.assertEqual(title["name"], "Hitman: Absolution")
+        self.assertEqual(title["publisher"], "Fallback Publisher")
+
+        entry.write_text(entry.read_text(encoding="utf-8") + "# changed\n", encoding="utf-8")
+        enabled, trusted = load_enabled_plugin_configuration(self.db_path, plugin.parent)
+        self.assertEqual((enabled, trusted), ([], {}))
 
     def test_package_workspace_is_read_only_and_profile_tools_are_audited(self):
         from community_services import PackageWorkspaceService

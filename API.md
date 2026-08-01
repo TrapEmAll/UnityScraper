@@ -45,6 +45,12 @@ when a token is configured.
 | `GET` | `/api/titleids` | List library TitleIDs |
 | `GET` | `/api/titleid/<TitleID>` | Get one library record |
 | `GET` | `/api/search?q=` | Search the library |
+| `GET` | `/api/community/search?q=` | Search all local domains; repeat `category` to filter |
+| `GET` | `/api/preservation/dedup/actions` | List duplicate actions from the latest or selected plan |
+| `POST` | `/api/preservation/dedup/preview` | Create a read-only duplicate preview for JSON `root` |
+| `POST` | `/api/preservation/dedup/<id>/apply` | Apply `quarantine` or `hardlink` mode |
+| `POST` | `/api/preservation/dedup/<id>/restore` | Revalidate and restore a quarantined original |
+| `GET` | `/api/plugins` | List managed plugins and checksum trust state |
 | `POST` | `/api/metadata/<TitleID>` | Collect metadata |
 | `POST` | `/api/download/<TitleID>` | Process downloads |
 | `GET` | `/api/statistics` | Library statistics |
@@ -56,6 +62,9 @@ when a token is configured.
 | `POST` | `/api/config` | Update allowlisted runtime settings |
 
 TitleID routes require exactly eight hexadecimal characters.
+Duplicate apply and restore endpoints change local files and therefore require
+an explicit action ID created by a prior preview. They retain a recovery copy
+until restoration and use the same path and checksum validation as the desktop.
 
 ## Configuration
 

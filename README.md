@@ -120,7 +120,11 @@ checksums, platform notes, and safety guidance.
 - Adds profile dashboards, read-only package workspaces, ownership previews,
   save comparison, played-title history, and validated GPD image export.
 - Manages preferred artwork, multi-disc audits, recoverable duplicate cleanup,
-  read-only FATX inspection, original Xbox discovery, plugins, and recovery.
+  read-only FATX geometry inspection, original Xbox discovery, plugins, and recovery.
+- Runs long Community Hub operations outside the interface thread, opens unified
+  search results in their native workspace, and restores quarantined duplicates.
+- Inventories STFS file tables in read-only package workspaces without claiming
+  unsupported package rebuilding or signing.
 - Stores high-contrast, large-text, reduced-motion, and keyboard-hint settings.
 
 See [COMMUNITY_HUB.md](COMMUNITY_HUB.md) for all twenty capabilities and their
@@ -323,6 +327,17 @@ python main.py --match-file game.iso
 
 # Capture a read-only console inventory
 python main.py --ftp-host 192.168.1.50 --ftp-snapshot /Hdd1
+
+# Search every local knowledge domain
+python main.py --search-all "Hitman"
+
+# Inspect FATX geometry or an Xbox 360 USB container without writing it
+python main.py --audit-storage E:\drive.img
+
+# Preview duplicate recovery actions, then apply or restore one explicitly
+python main.py --dedup-preview D:\XboxArchive
+python main.py --dedup-apply 42 --dedup-mode quarantine
+python main.py --dedup-restore 42
 ```
 
 ## Optional REST API

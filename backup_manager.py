@@ -15,7 +15,7 @@ import zipfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Callable, Iterable, Iterator, Optional
+from typing import Any, Callable, Iterable, Iterator, Optional
 
 
 STFS_MAGICS = {b"CON ", b"LIVE", b"PIRS"}
@@ -75,11 +75,28 @@ class StfsPackage:
 
 
 @dataclass(frozen=True)
+class StfsEntry:
+    index: int
+    path: str
+    name: str
+    is_directory: bool
+    consecutive: bool
+    allocated_blocks: int
+    starting_block: int
+    parent_index: int
+    size: int
+
+
+@dataclass(frozen=True)
 class XbePackage:
     path: Path
     title_id: str
     title_name: str
     size: int
+    allowed_media: int
+    region_flags: int
+    disc_number: int
+    version: int
 
 
 @dataclass(frozen=True)
@@ -198,6 +215,103 @@ def inspect_stfs(path: str | Path) -> StfsPackage:
     )
 
 
+def _stfs_data_block_number(block: int, magic: bytes, header_size: int,
+                            block_separation: int) -> int:
+    if block < 0 or block > 0xFFFFFF:
+        raise InvalidPackageError("STFS block number is outside the supported range")
+    aligned_header = (header_size + 0xFFF) & 0xFFFFF000
+    shift = 1 if aligned_header == 0xB000 else (0 if block_separation & 1 else 1)
+    base = (block + 0xAA) // 0xAA
+    if magic == b"CON ":
+        base <<= shift
+    result = base + block
+    if block > 0xAA:
+        base = (block + 0x70E4) // 0x70E4
+        if magic == b"CON ":
+            base <<= shift
+        result += base
+        if block > 0x70E4:
+            base = (block + 0x4AF768) // 0x4AF768
+            if magic == b"CON ":
+                base <<= shift
+            result += base
+    return result
+
+
+def list_stfs_entries(path: str | Path, max_entries: int = 100_000) -> list[StfsEntry]:
+    """Read the bounded STFS file table without extracting or mutating content."""
+    package_path = Path(path)
+    package_size = package_path.stat().st_size
+    with package_path.open("rb") as handle:
+        header = handle.read(0x3AD)
+        if len(header) < 0x3AD or header[:4] not in STFS_MAGICS:
+            raise InvalidPackageError("Not a supported STFS package")
+        if int.from_bytes(header[0x3A9:0x3AD], "big") != 0:
+            raise InvalidPackageError("SVOD packages do not contain an STFS file table")
+        header_size = int.from_bytes(header[0x340:0x344], "big")
+        descriptor = header[0x379:0x39D]
+        if descriptor[0] != 0x24:
+            raise InvalidPackageError("STFS volume descriptor is invalid")
+        block_separation = descriptor[2]
+        table_blocks = int.from_bytes(descriptor[3:5], "big")
+        table_start = int.from_bytes(descriptor[5:8], "big")
+        if table_blocks <= 0 or table_blocks > 0x1000:
+            raise InvalidPackageError("STFS file-table size is invalid")
+        aligned_header = (header_size + 0xFFF) & 0xFFFFF000
+        raw_entries: list[dict[str, Any]] = []
+        for table_index in range(table_blocks):
+            logical_block = table_start + table_index
+            physical_block = _stfs_data_block_number(
+                logical_block, header[:4], header_size, block_separation
+            )
+            offset = aligned_header + physical_block * 0x1000
+            if offset + 0x1000 > package_size:
+                raise InvalidPackageError("STFS file table points outside the package")
+            handle.seek(offset)
+            table = handle.read(0x1000)
+            for entry_offset in range(0, 0x1000, 0x40):
+                data = table[entry_offset:entry_offset + 0x40]
+                if not any(data):
+                    continue
+                flags = data[0x28]
+                name_length = flags & 0x3F
+                if name_length == 0 or name_length > 0x28:
+                    continue
+                name = data[:name_length].decode("utf-8", errors="replace")
+                raw_entries.append({
+                    "name": name,
+                    "directory": bool(flags & 0x80),
+                    "consecutive": bool(flags & 0x40),
+                    "blocks": int.from_bytes(data[0x29:0x2C], "little"),
+                    "start": int.from_bytes(data[0x2F:0x32], "little"),
+                    "parent": int.from_bytes(data[0x32:0x34], "big"),
+                    "size": int.from_bytes(data[0x34:0x38], "big"),
+                })
+                if len(raw_entries) > max_entries:
+                    raise InvalidPackageError("STFS file table exceeds the safety limit")
+    entries: list[StfsEntry] = []
+    for index, row in enumerate(raw_entries):
+        ancestors: list[str] = []
+        parent = row["parent"]
+        visited: set[int] = set()
+        while parent != 0xFFFF:
+            if parent >= len(raw_entries) or parent in visited:
+                ancestors = ["[invalid-parent]"]
+                break
+            visited.add(parent)
+            ancestors.append(raw_entries[parent]["name"])
+            parent = raw_entries[parent]["parent"]
+        full_path = "/".join(reversed(ancestors))
+        full_path = f"{full_path}/{row['name']}" if full_path else row["name"]
+        entries.append(StfsEntry(
+            index=index, path=full_path, name=row["name"],
+            is_directory=row["directory"], consecutive=row["consecutive"],
+            allocated_blocks=row["blocks"], starting_block=row["start"],
+            parent_index=row["parent"], size=row["size"],
+        ))
+    return entries
+
+
 def inspect_xbe(path: str | Path) -> XbePackage:
     """Read TitleID and title from an original Xbox executable certificate."""
     package_path = Path(path)
@@ -217,7 +331,13 @@ def inspect_xbe(path: str | Path) -> XbePackage:
     title_id = f"{int.from_bytes(certificate[0x8:0xC], 'little'):08X}"
     title_name = certificate[0xC:0x5C].decode("utf-16-le", errors="ignore")
     title_name = title_name.split("\x00", 1)[0].strip()
-    return XbePackage(package_path, title_id, title_name, package_path.stat().st_size)
+    return XbePackage(
+        package_path, title_id, title_name, package_path.stat().st_size,
+        int.from_bytes(certificate[0x9C:0xA0], "little"),
+        int.from_bytes(certificate[0xA0:0xA4], "little"),
+        int.from_bytes(certificate[0xA8:0xAC], "little"),
+        int.from_bytes(certificate[0xAC:0xB0], "little"),
+    )
 
 
 def inspect_xex(path: str | Path) -> XexPackage:
