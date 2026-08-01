@@ -5,6 +5,7 @@ Supports multiple languages with easy extensibility
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -12,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 # Supported languages
 SUPPORTED_LANGUAGES = ['en', 'es', 'fr', 'de', 'it', 'pt', 'ja']
+LANGUAGE_CODE_RE = re.compile(r"^[a-z]{2,3}(?:-[A-Z]{2})?$")
 
 # Translation strings
 TRANSLATIONS = {
@@ -68,6 +70,18 @@ TRANSLATIONS = {
         'pending': 'Pending',
         'downloaded': 'Downloaded',
         'failed': 'Failed',
+        'nav_library': 'LIBRARY',
+        'nav_add_games': 'ADD GAMES',
+        'nav_downloads': 'DOWNLOADS',
+        'nav_backups': 'BACKUP MANAGER',
+        'nav_profiles': 'PROFILES & SAVES',
+        'nav_tools': 'EXTERNAL TOOLS',
+        'nav_collections': 'COLLECTIONS',
+        'nav_knowledge': 'KNOWLEDGE',
+        'nav_community': 'COMMUNITY HUB',
+        'nav_health': 'ARCHIVE HEALTH',
+        'nav_settings': 'SETTINGS',
+        'nav_about': 'HELP & ABOUT',
     },
     'es': {
         'title': 'UnityScraper - Edición Mejorada',
@@ -242,7 +256,7 @@ TRANSLATIONS['pt'] = {
 
 def _repair_legacy_text(value: str) -> str:
     """Repair translations that were historically saved with the wrong encoding."""
-    if not any(marker in value for marker in ("Ã", "Â", "â", "ã", "ç", "é")):
+    if not any(marker in value for marker in ("Ã", "Â", "â", "ã", "æ", "ç", "é")):
         return value
     for encoding in ("cp1252", "latin-1"):
         try:
@@ -268,7 +282,7 @@ class Translator:
             logger.warning(f"Language '{language}' not supported, using English")
             language = 'en'
         self.language = language
-        self.strings = TRANSLATIONS.get(language, TRANSLATIONS['en'])
+        self.strings = {**TRANSLATIONS['en'], **TRANSLATIONS.get(language, {})}
     
     def get(self, key: str, *args) -> str:
         """Get translated string with optional formatting"""
@@ -283,7 +297,7 @@ class Translator:
             logger.warning(f"Language '{language}' not supported")
             return False
         self.language = language
-        self.strings = TRANSLATIONS.get(language, TRANSLATIONS['en'])
+        self.strings = {**TRANSLATIONS['en'], **TRANSLATIONS.get(language, {})}
         return True
     
     @staticmethod
@@ -296,9 +310,41 @@ class Translator:
 _translator: Optional[Translator] = None
 
 
-def init_translator(language: str = 'en') -> Translator:
+def load_language_packs(directory: str | Path) -> list[str]:
+    """Load bounded user language packs without executing code."""
+    root = Path(directory)
+    loaded: list[str] = []
+    if not root.is_dir():
+        return loaded
+    for path in sorted(root.glob("*.json")):
+        if path.stat().st_size > 1024 * 1024:
+            logger.warning("Ignoring oversized language pack: %s", path)
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            code = str(payload["language"])
+            strings = payload["strings"]
+            if not LANGUAGE_CODE_RE.fullmatch(code) or not isinstance(strings, dict):
+                raise ValueError("invalid language-pack schema")
+            validated = {
+                str(key): value for key, value in strings.items()
+                if isinstance(key, str) and isinstance(value, str) and len(value) <= 2000
+            }
+        except (OSError, json.JSONDecodeError, KeyError, ValueError) as exc:
+            logger.warning("Ignoring invalid language pack %s: %s", path, exc)
+            continue
+        TRANSLATIONS[code] = {**TRANSLATIONS["en"], **validated}
+        if code not in SUPPORTED_LANGUAGES:
+            SUPPORTED_LANGUAGES.append(code)
+        loaded.append(code)
+    return loaded
+
+
+def init_translator(language: str = 'en', language_pack_dir: str | Path | None = None) -> Translator:
     """Initialize global translator"""
     global _translator
+    if language_pack_dir is not None:
+        load_language_packs(language_pack_dir)
     _translator = Translator(language)
     return _translator
 

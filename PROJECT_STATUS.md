@@ -63,6 +63,12 @@ backup-management, and source-attributed knowledge application.
 - Additive schema migration 8 and local audit history for every new workspace.
 - Additive schema migration 9 for audited plugin collection and reversible
   duplicate actions, plus selectable restore controls.
+- Additive schema migration 10 for metadata snapshots, library audits,
+  preservation reports, correction exports, hardware records, and package extraction.
+- Visual Studio 2010-inspired shared desktop theme, classic menus, scoped API
+  tokens, out-of-process plugin execution, and bounded community language packs.
+- Read-only consecutive STFS extraction, direct Xenia launch controls, and
+  portable non-personal metadata distribution.
 - Background Community Hub jobs, actionable unified-search navigation, CLI/API
   parity for search and preservation, FATX geometry reports, and bounded STFS
   file-table inventory.
@@ -107,5 +113,7 @@ backup-management, and source-attributed knowledge application.
   of real dashboard FTP servers.
 - Add notarization and universal binaries after macOS signing infrastructure is
   available.
-- Consider package mutation only after complete STFS extraction, rehashing,
-  signing, verification, and automatic recovery have independent test vectors.
+- Complete fragmented STFS block-chain traversal and hash-tree verification
+  against independent real-package test vectors before considering mutation.
+- Consider package mutation only after complete extraction, rehashing, signing,
+  verification, and automatic recovery have independent test vectors.

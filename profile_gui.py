@@ -14,7 +14,13 @@ from gpd_parser import export_gpd_image
 from platform_support import open_path
 from profile_intelligence import ProfileIntelligenceService
 from profile_manager import ProfileSaveManager, mask_identifier
-from xenia_bridge import MigrationPlan, candidate_xenia_content_roots
+from xenia_bridge import (
+    MigrationPlan,
+    candidate_xenia_content_roots,
+    find_xenia_installation,
+    launch_xenia,
+)
+from ui_theme import PALETTE
 
 
 def _size(value: int) -> str:
@@ -345,7 +351,7 @@ class ProfileSavePage:
 
     def _build_compare(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(1, weight=1)
-        parent.rowconfigure(3, weight=1)
+        parent.rowconfigure(5, weight=1)
         self.compare_left_var = tk.StringVar()
         self.compare_right_var = tk.StringVar()
         ttk.Label(parent, text="First profile").grid(row=0, column=0, sticky=tk.W)
@@ -371,9 +377,9 @@ class ProfileSavePage:
         self.compare_text = tk.Text(
             parent,
             wrap=tk.WORD,
-            background="#070b08",
-            foreground="#f2f5f2",
-            insertbackground="#72e000",
+            background=PALETTE.field,
+            foreground=PALETTE.text,
+            insertbackground=PALETTE.accent_hot,
             relief=tk.FLAT,
             padx=12,
             pady=10,
@@ -458,6 +464,8 @@ class ProfileSavePage:
         candidates = [str(path) for path in candidate_xenia_content_roots()]
         self.xenia_root_var = tk.StringVar(value=candidates[0] if candidates else "")
         self.xenia_target_var = tk.StringVar()
+        self.xenia_game_var = tk.StringVar()
+        self.xenia_fullscreen_var = tk.BooleanVar(value=False)
         ttk.Label(parent, text="Xenia folder or content root").grid(
             row=0, column=0, sticky=tk.W
         )
@@ -473,8 +481,17 @@ class ProfileSavePage:
         ttk.Entry(parent, textvariable=self.xenia_target_var).grid(
             row=1, column=1, sticky="ew", padx=8, pady=(8, 0)
         )
+        ttk.Label(parent, text="Game image, folder, or default.xex").grid(
+            row=2, column=0, sticky=tk.W, pady=(8, 0)
+        )
+        ttk.Entry(parent, textvariable=self.xenia_game_var).grid(
+            row=2, column=1, sticky="ew", padx=8, pady=(8, 0)
+        )
+        ttk.Button(parent, text="Browse", command=self.choose_xenia_game).grid(
+            row=2, column=2, pady=(8, 0)
+        )
         controls = ttk.Frame(parent)
-        controls.grid(row=2, column=0, columnspan=3, sticky="ew", pady=10)
+        controls.grid(row=3, column=0, columnspan=3, sticky="ew", pady=10)
         ttk.Button(
             controls,
             text="Preview Migration",
@@ -488,6 +505,12 @@ class ProfileSavePage:
             state=tk.DISABLED,
         )
         self.xenia_execute_button.pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Checkbutton(
+            controls, text="Fullscreen", variable=self.xenia_fullscreen_var
+        ).pack(side=tk.LEFT, padx=(18, 4))
+        ttk.Button(controls, text="Launch Game", command=self.launch_xenia_game).pack(
+            side=tk.LEFT
+        )
         self.migration_tree = ttk.Treeview(
             parent,
             columns=("titleid", "file", "action", "reason"),
@@ -501,7 +524,7 @@ class ProfileSavePage:
         ):
             self.migration_tree.heading(column, text=label)
             self.migration_tree.column(column, width=width, anchor=tk.W)
-        self.migration_tree.grid(row=3, column=0, columnspan=3, sticky="nsew")
+        self.migration_tree.grid(row=5, column=0, columnspan=3, sticky="nsew")
         ttk.Label(
             parent,
             text=(
@@ -510,7 +533,7 @@ class ProfileSavePage:
             ),
             style="Subheader.TLabel",
             wraplength=900,
-        ).grid(row=4, column=0, columnspan=3, sticky="ew", pady=(8, 0))
+        ).grid(row=6, column=0, columnspan=3, sticky="ew", pady=(8, 0))
 
     def choose_source(self) -> None:
         selected = filedialog.askdirectory(
@@ -609,6 +632,37 @@ class ProfileSavePage:
         )
         if path:
             self.xenia_root_var.set(path)
+
+    def choose_xenia_game(self) -> None:
+        path = filedialog.askopenfilename(
+            parent=self.root,
+            title="Choose a game image or executable",
+            filetypes=(("Xbox games", "*.xex *.iso"), ("All files", "*.*")),
+        )
+        if not path:
+            path = filedialog.askdirectory(parent=self.root, title="Choose an extracted game")
+        if path:
+            self.xenia_game_var.set(path)
+
+    def launch_xenia_game(self) -> None:
+        installation = find_xenia_installation(self.xenia_root_var.get())
+        if installation is None:
+            messagebox.showerror(
+                "Xenia", "No Xenia or Xenia Canary executable was found in that folder.",
+                parent=self.root,
+            )
+            return
+        try:
+            result = launch_xenia(
+                installation, self.xenia_game_var.get(),
+                fullscreen=self.xenia_fullscreen_var.get(),
+            )
+        except Exception as exc:
+            messagebox.showerror("Xenia launch failed", str(exc), parent=self.root)
+            return
+        self.status_var.set(
+            f"Launched {result['variant']} for {Path(str(result['game'])).name}."
+        )
 
     def preview_xenia_migration(self) -> None:
         profile_id = self._selected_profile_id()

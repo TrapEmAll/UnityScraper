@@ -15,9 +15,13 @@ from typing import List, Dict, Any, Optional, Mapping
 import importlib.util
 import sys
 import threading
+import subprocess
+import tempfile
 
 logger = logging.getLogger(__name__)
 PLUGIN_API_VERSION = 1
+PLUGIN_RESULT_LIMIT = 2 * 1024 * 1024
+PLUGIN_TIMEOUT_SECONDS = 30
 
 
 @dataclass(frozen=True)
@@ -126,15 +130,18 @@ class PluginManager:
         enabled_plugins: Optional[List[str]] = None,
         trusted_hashes: Optional[Mapping[str, str]] = None,
         allow_legacy: bool = False,
+        isolated: bool = True,
     ):
         self.plugin_dir = Path(plugin_dir)
         self.plugins: Dict[str, MetadataCollectorPlugin] = {}
         self.manifests: Dict[str, PluginManifest] = {}
         self.plugin_ids_by_name: Dict[str, str] = {}
         self.plugin_locks: Dict[str, threading.Lock] = {}
+        self.isolated_entries: Dict[str, tuple[PluginManifest, Path]] = {}
         self.enabled_plugins = set(enabled_plugins or [])
         self.trusted_hashes = dict(trusted_hashes or {})
         self.allow_legacy = allow_legacy
+        self.isolated = isolated
         self._load_plugins()
     
     def _load_plugins(self):
@@ -152,7 +159,12 @@ class PluginManager:
                     expected = self.trusted_hashes.get(manifest.plugin_id)
                     if not expected or file_sha256(entry).casefold() != expected.casefold():
                         raise ValueError("Plugin entrypoint does not match its approved checksum")
-                    self._load_plugin_file(entry, manifest)
+                    if self.isolated:
+                        self.isolated_entries[manifest.name] = (manifest, entry.resolve())
+                        self.plugin_ids_by_name[manifest.name] = manifest.plugin_id
+                        self.plugin_locks[manifest.name] = threading.Lock()
+                    else:
+                        self._load_plugin_file(entry, manifest)
             except Exception as e:
                 logger.warning(f"Failed to load plugin {manifest_path}: {e}")
         if self.allow_legacy:
@@ -209,6 +221,7 @@ class PluginManager:
                 "permissions": list(manifest.permissions),
                 "enabled": manifest.plugin_id in self.enabled_plugins,
                 "loaded": manifest.name in self.plugins,
+                "isolated": manifest.name in self.isolated_entries,
             }
             for manifest in self.manifests.values()
         ]
@@ -233,19 +246,28 @@ class PluginManager:
     def collect_enabled(self, titleid: str) -> List[Dict[str, Any]]:
         """Run enabled collectors independently and retain success/failure details."""
         results: List[Dict[str, Any]] = []
-        for name, plugin in self.plugins.items():
+        names = list(dict.fromkeys([*self.plugins, *self.isolated_entries]))
+        for name in names:
             plugin_id = self.plugin_ids_by_name.get(name, name)
             try:
                 with self.plugin_locks[name]:
-                    if not plugin.validate_titleid(titleid):
-                        results.append({"plugin_id": plugin_id, "name": name,
-                                        "status": "skipped"})
-                        continue
-                    data = plugin.collect(titleid)
+                    if name in self.isolated_entries:
+                        isolated = self._collect_isolated(name, titleid)
+                        if isolated["status"] != "completed":
+                            results.append({"plugin_id": plugin_id, "name": name, **isolated})
+                            continue
+                        data = isolated["data"]
+                    else:
+                        plugin = self.plugins[name]
+                        if not plugin.validate_titleid(titleid):
+                            results.append({"plugin_id": plugin_id, "name": name,
+                                            "status": "skipped"})
+                            continue
+                        data = plugin.collect(titleid)
                 if not isinstance(data, dict):
                     raise TypeError("Plugin collect() must return a dictionary")
                 encoded = json.dumps(data, default=str)
-                if len(encoded.encode("utf-8")) > 2 * 1024 * 1024:
+                if len(encoded.encode("utf-8")) > PLUGIN_RESULT_LIMIT:
                     raise ValueError("Plugin result exceeds the 2 MiB safety limit")
             except Exception as exc:
                 logger.exception("Plugin %s failed for %s", plugin_id, titleid)
@@ -255,6 +277,50 @@ class PluginManager:
                 results.append({"plugin_id": plugin_id, "name": name,
                                 "status": "completed", "data": data})
         return results
+
+    def _collect_isolated(self, name: str, titleid: str) -> Dict[str, Any]:
+        manifest, entry = self.isolated_entries[name]
+        worker = Path(__file__).resolve().with_name("plugin_worker.py")
+        if getattr(sys, "frozen", False):
+            command = [
+                sys.executable, "--plugin-worker", str(entry), titleid,
+            ]
+        else:
+            command = [
+                sys.executable, str(worker), str(entry), titleid,
+            ]
+        with tempfile.TemporaryDirectory(prefix="unityscraper-plugin-") as temp:
+            output = Path(temp) / "result.json"
+            command.append(str(output))
+            try:
+                subprocess.run(
+                    command,
+                    cwd=str(entry.parent),
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=PLUGIN_TIMEOUT_SECONDS,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                return {"status": "failed", "error": "Plugin execution timed out"}
+            if not output.is_file():
+                return {"status": "failed", "error": "Plugin worker returned no result"}
+            if output.stat().st_size > PLUGIN_RESULT_LIMIT:
+                return {"status": "failed", "error": "Plugin result exceeds safety limit"}
+            try:
+                payload = json.loads(output.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                return {"status": "failed", "error": f"Invalid plugin result: {exc}"}
+            if not isinstance(payload, dict) or payload.get("status") not in {
+                "completed", "skipped", "failed"
+            }:
+                return {"status": "failed", "error": "Plugin returned an invalid status"}
+            if payload.get("status") == "failed":
+                payload["error"] = str(payload.get("error", "Plugin failed"))[:1000]
+            payload["worker"] = "isolated-process"
+            payload["plugin_id"] = manifest.plugin_id
+            return payload
 
 
 # Example plugin template (to be saved in plugins/example.py)

@@ -961,6 +961,20 @@ def main():
                         help='Restore one quarantined duplicate action by ID')
     parser.add_argument('--dedup-mode', choices=['quarantine', 'hardlink'],
                         default='quarantine', help='Action used with --dedup-apply')
+    parser.add_argument('--metadata-snapshot-export', type=str,
+                        help='Export portable source-attributed metadata to a .usmeta file')
+    parser.add_argument('--metadata-snapshot-import', type=str,
+                        help='Merge a portable .usmeta snapshot without personal data')
+    parser.add_argument('--library-audit', action='store_true',
+                        help='Report missing names, publishers, covers, updates, and MediaIDs')
+    parser.add_argument('--preservation-report', type=str,
+                        help='Export a privacy-conscious HTML preservation report')
+    parser.add_argument('--corrections-export', type=str,
+                        help='Export reviewed local metadata corrections as JSON')
+    parser.add_argument('--extract-stfs', type=str,
+                        help='Extract supported files read-only from an STFS package')
+    parser.add_argument('--extract-destination', type=str,
+                        help='Destination folder required by --extract-stfs')
     parser.add_argument(
         '--scan-backups',
         type=str,
@@ -1159,9 +1173,25 @@ def main():
         or args.dedup_preview
         or args.dedup_apply is not None
         or args.dedup_restore is not None
+        or args.metadata_snapshot_export
+        or args.metadata_snapshot_import
+        or args.library_audit
+        or args.preservation_report
+        or args.corrections_export
+        or args.extract_stfs
     ):
         try:
-            from community_services import PreservationPlanningService, StorageAndXboxService
+            from community_services import (
+                PackageWorkspaceService,
+                PreservationPlanningService,
+                StorageAndXboxService,
+            )
+            from roadmap_services import (
+                CorrectionPackageService,
+                LibraryIntelligenceService,
+                MetadataSnapshotService,
+                PreservationReportService,
+            )
             from structured_knowledge import StructuredKnowledgeService
             from unified_search import UnifiedSearchService
 
@@ -1189,6 +1219,30 @@ def main():
             if args.dedup_restore is not None:
                 results["dedup_restore"] = preservation.restore_dedup_action(
                     args.dedup_restore
+                )
+            if args.metadata_snapshot_export:
+                results["metadata_snapshot_export"] = MetadataSnapshotService().export(
+                    args.metadata_snapshot_export
+                )
+            if args.metadata_snapshot_import:
+                results["metadata_snapshot_import"] = MetadataSnapshotService().import_snapshot(
+                    args.metadata_snapshot_import
+                )
+            if args.library_audit:
+                results["library_audit"] = LibraryIntelligenceService().audit()
+            if args.preservation_report:
+                results["preservation_report"] = PreservationReportService().export_html(
+                    args.preservation_report
+                )
+            if args.corrections_export:
+                results["corrections_export"] = CorrectionPackageService().export(
+                    args.corrections_export
+                )
+            if args.extract_stfs:
+                if not args.extract_destination:
+                    parser.error("--extract-destination is required with --extract-stfs")
+                results["stfs_extraction"] = PackageWorkspaceService().extract_read_only(
+                    args.extract_stfs, args.extract_destination
                 )
             print(json.dumps(results, indent=2, default=str))
             sys.exit(0)

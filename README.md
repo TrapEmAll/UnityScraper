@@ -75,6 +75,8 @@ service exposes. UnityScraper does not silently substitute HTTPS URLs.
 - Reads extracted XDBF/GPD achievement databases without modifying them.
 - Compares save hashes and imported achievement state across two profiles.
 - Previews Xenia save mappings and creates a verified snapshot before migration.
+- Discovers Xenia or Xenia Canary beside a selected content folder and launches
+  user-selected games directly without constructing a shell command.
 
 The profile/package model is informed by Dalavin, also known as DJ
 SkunkieButt, and the GPLv3 X360 library and Le Fluffie source. See
@@ -125,7 +127,19 @@ checksums, platform notes, and safety guidance.
   search results in their native workspace, and restores quarantined duplicates.
 - Inventories STFS file tables in read-only package workspaces without claiming
   unsupported package rebuilding or signing.
+- Extracts supported consecutive STFS files read-only with path validation,
+  output limits, atomic files, hashes, and a manifest.
 - Stores high-contrast, large-text, reduced-motion, and keyboard-hint settings.
+- Exports and imports non-personal metadata snapshots, audits incomplete library
+  metadata, creates preservation reports and correction packages, and records
+  local hardware notes.
+
+### Desktop Style
+
+The desktop uses a Visual Studio 2010-inspired dark tool aesthetic: compact
+square controls, charcoal chrome, blue selection and focus states, classic menu
+commands, dense tables, and status bars. The primary and Advanced Tools windows
+share the same theme, with high-contrast and large-text alternatives retained.
 
 See [COMMUNITY_HUB.md](COMMUNITY_HUB.md) for all twenty capabilities and their
 safety boundaries.
@@ -207,7 +221,7 @@ Linux source setup:
 | External Tools | Run XeXTool and other user-supplied command-line utilities |
 | Collections | Identify storage, compare Title Updates, verify preservation data, and preview repairs |
 | Knowledge | Search sources, facts, citations, imports, and conflicts |
-| Community Hub | Unified search, console plans, profiles, preservation, plugins, recovery, and compatibility |
+| Community Hub | Unified search, console plans, profiles, preservation, plugins, recovery, compatibility, and release toolkit |
 | Archive Health | Find missing or inconsistent downloaded files |
 | Settings | Configure storage and scraper behavior |
 | Help & About | Version, diagnostics, storage, and advanced tools |
@@ -338,6 +352,17 @@ python main.py --audit-storage E:\drive.img
 python main.py --dedup-preview D:\XboxArchive
 python main.py --dedup-apply 42 --dedup-mode quarantine
 python main.py --dedup-restore 42
+
+# Share or consume a non-personal offline metadata snapshot
+python main.py --metadata-snapshot-export xbox360.usmeta
+python main.py --metadata-snapshot-import xbox360.usmeta
+
+# Audit the library and produce a privacy-conscious report
+python main.py --library-audit
+python main.py --preservation-report preservation.html
+
+# Extract supported files without changing the STFS source package
+python main.py --extract-stfs save.con --extract-destination extracted
 ```
 
 ## Optional REST API
@@ -356,8 +381,15 @@ python main.py --api-mode --api-host 0.0.0.0
 ```
 
 Clients send the token as `Authorization: Bearer <token>` or `X-API-Key`.
+Multiple scoped tokens can be provided through `UNITYSCRAPER_API_TOKENS` as a
+JSON object whose values contain `read`, `write`, or `transfer`. Requests are
+rate-limited per client.
 Remote HTTP is not encrypted; place it behind a trusted local reverse proxy or
 use it only on an isolated network. See [API.md](API.md).
+
+See [RELEASE_TOOLKIT.md](RELEASE_TOOLKIT.md) for metadata snapshot privacy,
+library intelligence, reports, corrections, hardware records, and STFS
+extraction boundaries.
 
 ## Build and Test
 

@@ -37,6 +37,10 @@ X-API-Key: <token>
 The health endpoint does not require authentication. All other endpoints do
 when a token is configured.
 
+For separate automation clients, `UNITYSCRAPER_API_TOKENS` accepts a JSON object
+mapping tokens to `read`, `write`, or `transfer` scopes. A legacy single token
+has all scopes. Requests are limited per client to 120 per minute by default.
+
 ## Endpoints
 
 | Method | Path | Purpose |
@@ -51,6 +55,13 @@ when a token is configured.
 | `POST` | `/api/preservation/dedup/<id>/apply` | Apply `quarantine` or `hardlink` mode |
 | `POST` | `/api/preservation/dedup/<id>/restore` | Revalidate and restore a quarantined original |
 | `GET` | `/api/plugins` | List managed plugins and checksum trust state |
+| `GET` | `/api/library/audit` | Find incomplete names, publishers, covers, updates, and MediaIDs |
+| `POST` | `/api/metadata-snapshots/export` | Export a non-personal `.usmeta` snapshot |
+| `POST` | `/api/metadata-snapshots/import` | Merge a validated `.usmeta` snapshot |
+| `POST` | `/api/packages/extract` | Extract supported STFS files read-only |
+| `POST` | `/api/reports/preservation` | Create a privacy-conscious HTML report |
+| `GET` | `/api/hardware` | List local console hardware notes |
+| `POST` | `/api/hardware` | Add a local console hardware record |
 | `POST` | `/api/metadata/<TitleID>` | Collect metadata |
 | `POST` | `/api/download/<TitleID>` | Process downloads |
 | `GET` | `/api/statistics` | Library statistics |
@@ -106,3 +117,5 @@ Invoke-RestMethod `
 - Browser CORS is restricted to localhost origins unless the API is embedded
   programmatically with an explicit origin list.
 - Responses disable caching and include basic content and frame protections.
+- Tokens can be separated by read, write, and transfer scope, and each client
+  has a bounded request window.

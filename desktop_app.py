@@ -19,6 +19,11 @@ def _write_startup_report(exc: BaseException) -> str:
 
 def main() -> int:
     """Initialize writable storage and launch the desktop application."""
+    if len(sys.argv) > 1 and sys.argv[1] == "--plugin-worker":
+        from plugin_worker import main as plugin_worker_main
+
+        return plugin_worker_main(sys.argv[2:])
+
     ensure_app_dirs()
     ensure_user_titleids_file()
 

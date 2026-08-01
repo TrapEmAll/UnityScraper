@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import logging
+import json
 import os
 import secrets
 import threading
+import time
+from collections import defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
@@ -49,16 +52,36 @@ class UnityScraperAPI:
         port: int = 8000,
         host: str = "127.0.0.1",
         token: Optional[str] = None,
+        token_scopes: Optional[dict[str, list[str]]] = None,
         cors_origins: Optional[list[str]] = None,
+        requests_per_minute: int = 120,
     ):
         self.scraper = scraper
         self.port = port
         self.host = host
         self.token = token or os.environ.get("UNITYSCRAPER_API_TOKEN", "").strip()
-        if host not in LOOPBACK_HOSTS and not self.token:
+        self.tokens: dict[str, frozenset[str]] = {
+            key: frozenset(values) for key, values in (token_scopes or {}).items() if key
+        }
+        if self.token:
+            self.tokens[self.token] = frozenset({"*"})
+        raw_tokens = os.environ.get("UNITYSCRAPER_API_TOKENS", "").strip()
+        if raw_tokens:
+            try:
+                configured = json.loads(raw_tokens)
+                if isinstance(configured, dict):
+                    for key, values in configured.items():
+                        if isinstance(key, str) and key and isinstance(values, list):
+                            self.tokens[key] = frozenset(str(value) for value in values)
+            except json.JSONDecodeError:
+                logger.warning("UNITYSCRAPER_API_TOKENS is not valid JSON")
+        if host not in LOOPBACK_HOSTS and not self.tokens:
             raise ValueError(
                 "A token is required when the API is bound beyond localhost"
             )
+        self.requests_per_minute = max(10, min(int(requests_per_minute), 10_000))
+        self._request_windows: dict[str, deque[float]] = defaultdict(deque)
+        self._security_lock = threading.Lock()
 
         self.app = Flask(__name__)
         self.app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
@@ -77,14 +100,31 @@ class UnityScraperAPI:
     def _register_security(self) -> None:
         @self.app.before_request
         def require_token():
-            if not self.token or request.path == "/api/health":
+            client = request.remote_addr or "unknown"
+            now = time.monotonic()
+            with self._security_lock:
+                window = self._request_windows[client]
+                while window and now - window[0] >= 60:
+                    window.popleft()
+                if len(window) >= self.requests_per_minute:
+                    return jsonify({"error": "Request limit exceeded"}), 429
+                window.append(now)
+            if not self.tokens or request.path == "/api/health":
                 return None
             supplied = request.headers.get("X-API-Key", "")
             authorization = request.headers.get("Authorization", "")
             if authorization.startswith("Bearer "):
                 supplied = authorization[7:]
-            if not secrets.compare_digest(supplied, self.token):
+            matched_scopes: frozenset[str] | None = None
+            for configured_token, scopes in self.tokens.items():
+                if secrets.compare_digest(supplied, configured_token):
+                    matched_scopes = scopes
+                    break
+            if matched_scopes is None:
                 return jsonify({"error": "Authentication required"}), 401
+            required = self._required_scope(request.method, request.path)
+            if "*" not in matched_scopes and required not in matched_scopes:
+                return jsonify({"error": f"Token lacks the {required} scope"}), 403
             return None
 
         @self.app.after_request
@@ -102,7 +142,8 @@ class UnityScraperAPI:
                     "status": "healthy",
                     "version": DISPLAY_VERSION,
                     "scraper_loaded": self.scraper is not None,
-                    "authentication_required": bool(self.token),
+                    "authentication_required": bool(self.tokens),
+                    "rate_limit_per_minute": self.requests_per_minute,
                 }
             )
 
@@ -208,6 +249,99 @@ class UnityScraperAPI:
             return self._execute(lambda: {
                 "plugins": PluginControlService(self._database_path()).discover(PLUGINS_DIR)
             })
+
+        @self.app.get("/api/library/audit")
+        def library_audit():
+            from roadmap_services import LibraryIntelligenceService
+
+            return self._execute(
+                lambda: LibraryIntelligenceService(self._database_path()).audit()
+            )
+
+        @self.app.post("/api/metadata-snapshots/export")
+        def metadata_snapshot_export():
+            from roadmap_services import MetadataSnapshotService
+
+            payload = request.get_json(silent=True)
+            if not isinstance(payload, dict) or not isinstance(payload.get("destination"), str):
+                return jsonify({"error": "A destination path is required"}), 400
+            return self._execute(
+                lambda: MetadataSnapshotService(self._database_path()).export(
+                    payload["destination"]
+                )
+            )
+
+        @self.app.post("/api/metadata-snapshots/import")
+        def metadata_snapshot_import():
+            from roadmap_services import MetadataSnapshotService
+
+            payload = request.get_json(silent=True)
+            if not isinstance(payload, dict) or not isinstance(payload.get("source"), str):
+                return jsonify({"error": "A source path is required"}), 400
+            return self._execute(
+                lambda: MetadataSnapshotService(self._database_path()).import_snapshot(
+                    payload["source"]
+                )
+            )
+
+        @self.app.post("/api/packages/extract")
+        def package_extract():
+            from community_services import PackageWorkspaceService
+
+            payload = request.get_json(silent=True)
+            if not isinstance(payload, dict):
+                return jsonify({"error": "A JSON object is required"}), 400
+            source = payload.get("source")
+            destination = payload.get("destination")
+            selected = payload.get("selected_paths")
+            if not isinstance(source, str) or not isinstance(destination, str):
+                return jsonify({"error": "source and destination paths are required"}), 400
+            if selected is not None and (
+                not isinstance(selected, list) or not all(isinstance(item, str) for item in selected)
+            ):
+                return jsonify({"error": "selected_paths must be a string array"}), 400
+            return self._execute(
+                lambda: PackageWorkspaceService(self._database_path()).extract_read_only(
+                    source, destination, selected
+                )
+            )
+
+        @self.app.post("/api/reports/preservation")
+        def preservation_report():
+            from roadmap_services import PreservationReportService
+
+            payload = request.get_json(silent=True)
+            if not isinstance(payload, dict) or not isinstance(payload.get("destination"), str):
+                return jsonify({"error": "A destination path is required"}), 400
+            return self._execute(
+                lambda: PreservationReportService(self._database_path()).export_html(
+                    payload["destination"]
+                )
+            )
+
+        @self.app.get("/api/hardware")
+        def hardware_list():
+            from roadmap_services import HardwareInventoryService
+
+            return self._execute(
+                lambda: {"records": HardwareInventoryService(self._database_path()).list()}
+            )
+
+        @self.app.post("/api/hardware")
+        def hardware_save():
+            from roadmap_services import HardwareInventoryService
+
+            payload = request.get_json(silent=True)
+            if not isinstance(payload, dict) or not isinstance(payload.get("label"), str):
+                return jsonify({"error": "A record label is required"}), 400
+            values = {key: value for key, value in payload.items() if key != "label"}
+            if not all(isinstance(value, str) for value in values.values()):
+                return jsonify({"error": "Hardware fields must be strings"}), 400
+            return self._execute(
+                lambda: HardwareInventoryService(self._database_path()).save(
+                    payload["label"], **values
+                )
+            )
 
         @self.app.post("/api/metadata/<titleid>")
         def collect_metadata(titleid: str):
@@ -351,6 +485,14 @@ class UnityScraperAPI:
         if self.scraper is None:
             raise RuntimeError("Scraper not initialized")
         return self.scraper
+
+    @staticmethod
+    def _required_scope(method: str, path: str) -> str:
+        if method in {"GET", "HEAD", "OPTIONS"}:
+            return "read"
+        if path.startswith("/api/download") or path.startswith("/api/retry-failed"):
+            return "transfer"
+        return "write"
 
     def _database_path(self) -> Path:
         if self.scraper is None:

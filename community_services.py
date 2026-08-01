@@ -18,7 +18,13 @@ from typing import Any, Iterable
 from PIL import Image
 
 from app_paths import DATABASE_PATH
-from backup_manager import FtpTarget, inspect_stfs, inspect_xbe, list_stfs_entries
+from backup_manager import (
+    FtpTarget,
+    extract_stfs_files,
+    inspect_stfs,
+    inspect_xbe,
+    list_stfs_entries,
+)
 from console_sync import ConsoleSyncService
 from database_migrations import ensure_application_schema
 from plugins import PluginManifest
@@ -290,6 +296,26 @@ class PackageWorkspaceService(CommunityRepository):
                         "package": details}, indent=2), encoding="utf-8"
         )
         return manifest
+
+    def extract_read_only(
+        self,
+        package_path: str | Path,
+        destination: str | Path,
+        selected_paths: Iterable[str] | None = None,
+    ) -> dict[str, Any]:
+        """Extract supported files without changing or replacing package data."""
+        result = extract_stfs_files(package_path, destination, selected_paths)
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """INSERT INTO package_extraction_runs(
+                       source_path,destination,created_at,extracted_count,skipped_count,
+                       manifest_path,status) VALUES (?,?,?,?,?,?,'completed')""",
+                (str(Path(package_path).expanduser().resolve()),
+                 str(Path(destination).expanduser().resolve()), utc_now(),
+                 len(result["extracted"]), len(result["skipped"]), result["manifest"]),
+            )
+        result["run_id"] = int(cursor.lastrowid or 0)
+        return result
 
 
 class ArtworkService(CommunityRepository):
@@ -796,6 +822,10 @@ class RecoveryService(CommunityRepository):
                 ("failed_transfer", "SELECT id, local_path source, error_message details FROM console_transfer_jobs WHERE status='failed'"),
                 ("incomplete_snapshot", "SELECT id, snapshot_path source, status details FROM save_snapshots WHERE status<>'complete'"),
                 ("failed_operation", "SELECT id, source, error_message details FROM backup_operations WHERE status='failed'"),
+                ("failed_profile_operation", "SELECT id, target_path source, error_message details FROM profile_save_operations WHERE status='failed'"),
+                ("failed_catalog_sync", "SELECT id, 'XboxUnity title catalog' source, error_message details FROM xboxunity_catalog_sync_runs WHERE status IN ('failed','interrupted')"),
+                ("failed_plugin_run", "SELECT id, plugin_id || ':' || titleid source, error_message details FROM plugin_collection_runs WHERE status='failed'"),
+                ("failed_knowledge_sync", "SELECT id, source_slug || ':' || adapter_name source, errors details FROM knowledge_import_runs WHERE status IN ('failed','partial')"),
             )
             for event_type, sql in queries:
                 for row in connection.execute(sql).fetchall():

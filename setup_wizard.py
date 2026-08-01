@@ -16,6 +16,7 @@ from app_paths import (
     ensure_user_titleids_file,
 )
 from platform_support import desktop_font_family
+from knowledge_scheduler import KnowledgeScheduler
 
 
 UI_FONT = desktop_font_family()
@@ -29,7 +30,7 @@ class SetupWizard(tk.Toplevel):
         self.parent = parent
         self.completed = False
         self.title("Welcome to UnityScraper")
-        self.geometry("620x500")
+        self.geometry("650x610")
         self.resizable(False, False)
         self.transient(parent)
         self.grab_set()
@@ -40,6 +41,9 @@ class SetupWizard(tk.Toplevel):
         self.output_var = tk.StringVar(value=str(DOWNLOADS_DIR))
         self.titleids_var = tk.StringVar()
         self.collection_var = tk.StringVar()
+        self.catalog_var = tk.BooleanVar(value=True)
+        self.knowledge_var = tk.BooleanVar(value=False)
+        self.refresh_days_var = tk.IntVar(value=7)
 
         self._build()
 
@@ -69,7 +73,7 @@ class SetupWizard(tk.Toplevel):
         ttk.Entry(folder_row, textvariable=self.output_var).pack(
             side=tk.LEFT, fill=tk.X, expand=True
         )
-        ttk.Button(folder_row, text="Browse…", command=self._browse).pack(
+        ttk.Button(folder_row, text="Browse...", command=self._browse).pack(
             side=tk.LEFT, padx=(8, 0)
         )
 
@@ -91,6 +95,24 @@ class SetupWizard(tk.Toplevel):
         ttk.Button(collection_row, text="Browse", command=self._browse_collection).pack(
             side=tk.LEFT, padx=(8, 0)
         )
+
+        sources = ttk.LabelFrame(container, text="Local metadata", padding=10)
+        sources.pack(fill=tk.X, pady=(12, 0))
+        ttk.Checkbutton(
+            sources,
+            text="Pre-cache the XboxUnity title catalog for offline autocomplete",
+            variable=self.catalog_var,
+        ).grid(row=0, column=0, columnspan=3, sticky="w")
+        ttk.Checkbutton(
+            sources,
+            text="Refresh ConsoleMods, XenonLibrary, and Free60 knowledge automatically",
+            variable=self.knowledge_var,
+        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ttk.Label(sources, text="Every").grid(row=2, column=0, sticky="w", pady=(6, 0))
+        ttk.Spinbox(
+            sources, from_=1, to=365, width=6, textvariable=self.refresh_days_var
+        ).grid(row=2, column=1, sticky="w", padx=5, pady=(6, 0))
+        ttk.Label(sources, text="days").grid(row=2, column=2, sticky="w", pady=(6, 0))
 
         ttk.Separator(container).pack(fill=tk.X, pady=22)
 
@@ -159,6 +181,8 @@ class SetupWizard(tk.Toplevel):
                     else config.get("collection_roots", [])
                 ),
                 "ui_scale": float(config.get("ui_scale", 1.0)),
+                "sync_title_catalog_on_start": self.catalog_var.get(),
+                "language": str(config.get("language", "en")),
             }
         )
         CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
@@ -170,6 +194,10 @@ class SetupWizard(tk.Toplevel):
         ]
         if titleids:
             TITLEIDS_PATH.write_text(",".join(dict.fromkeys(titleids)), encoding="utf-8")
+
+        KnowledgeScheduler().configure(
+            self.knowledge_var.get(), max(1, self.refresh_days_var.get()) * 24
+        )
 
         FIRST_RUN_PATH.write_text("complete\n", encoding="utf-8")
         self.completed = True

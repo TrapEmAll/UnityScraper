@@ -29,8 +29,12 @@ to 2 MiB, cover/update counts are bounded, failures are isolated, and every run
 is audited in SQLite. Known title and publisher values are never replaced by a
 plugin fallback.
 
+Enabled collectors run in a child process with a 30-second timeout and a bounded
+result file. POSIX builds also request CPU, address-space, and output-file limits.
+A timeout or worker crash does not terminate the desktop collection job.
+
 Requested access is disclosure metadata, not an operating-system sandbox.
-Plugin code executes with the user's account permissions, so only enable source
+Plugin code still executes with the user's account permissions, so only enable source
 and publishers you trust. Editing an enabled entrypoint automatically prevents
 it from loading until it is reviewed and enabled again.
 

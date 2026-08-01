@@ -40,6 +40,17 @@ and atomically renamed. Existing files are skipped by default.
 **Import ZIP** applies the same checks to packages in a user-supplied ZIP.
 Absolute paths, parent traversal, and archive symlinks are rejected.
 
+## Read-only STFS extraction
+
+The Community Hub package workspace can inventory and extract files stored in
+consecutive STFS blocks. Extraction rejects unsafe paths, limits total output,
+never replaces existing files, stages each output atomically, and creates a
+manifest with source and extracted-file SHA-256 values. Fragmented files are
+reported and skipped rather than reconstructed without verified block-chain and
+hash-tree support.
+
+The parser follows the public [Free60 STFS format reference](https://free60.org/System-Software/Formats/STFS/).
+
 ## Export and verification
 
 **Export Selected** copies an inventoried title to a separate archive folder
@@ -103,6 +114,9 @@ python main.py --verify-backups E:\ --backup-report health.json
 
 # Upload a package to a console FTP server
 python main.py --ftp-upload game.live --ftp-host 192.168.1.50
+
+# Read-only extraction of supported STFS files
+python main.py --extract-stfs save.con --extract-destination extracted
 ```
 
 ## Inspiration and licensing

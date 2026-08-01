@@ -615,9 +615,9 @@ class CollectionIntelligenceService:
             )
         document = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>UnityScraper Collection</title>
-<style>body{{font:16px system-ui;background:#0b0f0c;color:#eef4ef;margin:2rem}}
-h1{{color:#75d34b}}table{{border-collapse:collapse;width:100%}}th,td{{padding:.55rem;
-border-bottom:1px solid #334038;text-align:left}}.score{{font-size:2rem}}</style></head>
+<style>body{{font:14px Segoe UI,system-ui;background:#1e1e1e;color:#f1f1f1;margin:2rem}}
+h1{{color:#4fc1ff;font-weight:400}}table{{border-collapse:collapse;width:100%}}th,td{{padding:.55rem;
+border-bottom:1px solid #3f3f46;text-align:left}}th{{background:#2d2d30}}.score{{font-size:2rem}}</style></head>
 <body><h1>Xbox 360 Collection Report</h1>
 <p class="score">Health score: {analysis.health_score}/100</p>
 <p>Generated {html.escape(utc_now())}; source {html.escape(str(analysis.result.root))}</p>
