@@ -936,6 +936,21 @@ def main():
         help='Optional maximum article count per wiki source'
     )
     parser.add_argument(
+        '--build-offline-knowledge',
+        action='store_true',
+        help='Build a private offline HTML library from cached wiki pages'
+    )
+    parser.add_argument(
+        '--import-saved-wiki',
+        type=str,
+        help='Import a browser-saved HTML page, folder, or ZIP archive'
+    )
+    parser.add_argument(
+        '--saved-wiki-source',
+        choices=['consolemods-wiki', 'xenonlibrary', 'free60'],
+        help='Source attribution required by --import-saved-wiki'
+    )
+    parser.add_argument(
         '--import-dat',
         type=str,
         help='Import a local Redump or No-Intro XML DAT file'
@@ -1150,6 +1165,33 @@ def main():
             sys.exit(0)
         except Exception as e:
             logger.error(f"Wiki sync failed: {e}")
+            sys.exit(1)
+
+    if args.build_offline_knowledge:
+        try:
+            from offline_knowledge import OfflineKnowledgeArchive
+
+            summary = OfflineKnowledgeArchive().rebuild()
+            logger.info("Offline knowledge library built: %s", summary)
+            sys.exit(0)
+        except Exception as e:
+            logger.error("Offline knowledge build failed: %s", e)
+            sys.exit(1)
+
+    if args.import_saved_wiki:
+        if not args.saved_wiki_source:
+            parser.error("--saved-wiki-source is required with --import-saved-wiki")
+        try:
+            from offline_knowledge import OfflineKnowledgeArchive
+
+            summary = OfflineKnowledgeArchive().import_saved_pages(
+                args.import_saved_wiki,
+                args.saved_wiki_source,
+            )
+            logger.info("Saved wiki import completed: %s", summary)
+            sys.exit(0)
+        except Exception as e:
+            logger.error("Saved wiki import failed: %s", e)
             sys.exit(1)
 
     if args.import_dat:

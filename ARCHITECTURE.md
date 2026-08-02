@@ -38,6 +38,8 @@ results to Tk's main loop.
 - `profile_manager.py` owns Content-tree discovery, STFS ownership inspection,
   profile/save indexing, verified snapshots, and conflict-safe restore.
 - `knowledge_sync.py` exposes complete source-import workflows to CLI and GUI.
+- `offline_knowledge.py` safely imports browser-saved pages and renders the
+  self-contained local reading library.
 - `collection_intelligence.py` coordinates snapshots, exact MediaID matching,
   health, preservation matching, repair previews, and offline exports.
 - `console_sync.py` owns durable transfer jobs, resumable FTP, remote
@@ -72,7 +74,7 @@ Main schema groups:
 - Library: `titleids`, `title_updates`, `covers`, `download_history`
 - Knowledge: sources, documents, revisions, entities, names, identifiers,
   facts, citations, relationships, import runs, conflicts, source priorities,
-  conflict decisions, and scheduled sync state
+  conflict decisions, scheduled sync state, and offline archive/import runs
 - Backups: targets, scans, inventory, and operations
 - Profiles: scan runs, profiles, saves, snapshots, snapshot files, GPD
   inventories, achievements, comparisons, Xenia migration runs, and auditable
@@ -91,12 +93,13 @@ data and be covered by tests.
 ```text
 source discovery
   -> rate-limited fetch
-  -> raw cache
+  -> raw cache or validated browser-saved page
   -> source adapter
   -> normalized records
   -> citations and conflicts
   -> preferred fact selection
   -> fill unknown library metadata
+  -> script-free offline HTML archive
 ```
 
 Raw documents and retrieval metadata remain attached to their source. A parser

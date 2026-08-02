@@ -148,6 +148,7 @@ DIAGNOSTICS_DIR = _PATHS.diagnostics
 PROFILE_BACKUPS_DIR = DATA_DIR / "profile_backups"
 PLUGINS_DIR = DATA_DIR / "plugins"
 LANGUAGE_PACKS_DIR = DATA_DIR / "languages"
+OFFLINE_KNOWLEDGE_DIR = DATA_DIR / "offline_knowledge"
 
 DATABASE_PATH = DATA_DIR / "unityscraper.db"
 CONFIG_PATH = CONFIG_DIR / "config.json"
@@ -176,6 +177,7 @@ def ensure_app_dirs() -> None:
         PROFILE_BACKUPS_DIR,
         PLUGINS_DIR,
         LANGUAGE_PACKS_DIR,
+        OFFLINE_KNOWLEDGE_DIR,
     ):
         path.mkdir(parents=True, exist_ok=True)
 

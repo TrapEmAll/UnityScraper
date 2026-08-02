@@ -10,6 +10,8 @@ from typing import Any
 
 from knowledge_service import KnowledgeService
 from knowledge_scheduler import KnowledgeScheduler
+from offline_knowledge import OfflineKnowledgeArchive
+from platform_support import open_path
 from ui_theme import PALETTE
 
 TEXT = PALETTE.text
@@ -150,7 +152,7 @@ class KnowledgePage:
 
     def _build_sources(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(0, weight=1)
-        parent.rowconfigure(1, weight=1)
+        parent.rowconfigure(2, weight=1)
         controls = ttk.Frame(parent)
         controls.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         buttons = (
@@ -172,6 +174,33 @@ class KnowledgePage:
             style="Subheader.TLabel",
         ).pack(side=tk.RIGHT)
 
+        archive_controls = ttk.Frame(parent)
+        archive_controls.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        self.saved_page_source_var = tk.StringVar(value="ConsoleMods")
+        ttk.Combobox(
+            archive_controls,
+            textvariable=self.saved_page_source_var,
+            values=("ConsoleMods", "XenonLibrary", "Free60"),
+            state="readonly",
+            width=17,
+        ).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(
+            archive_controls,
+            text="Import Saved Wiki Pages",
+            command=self._select_saved_pages,
+        ).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(
+            archive_controls,
+            text="Rebuild Offline Library",
+            command=self._rebuild_offline_library,
+        ).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(
+            archive_controls,
+            text="Open Offline Library",
+            command=self._open_offline_library,
+            style="Accent.TButton",
+        ).pack(side=tk.LEFT)
+
         self.source_tree = ttk.Treeview(
             parent,
             columns=("license", "documents", "facts", "status", "last_sync"),
@@ -188,7 +217,7 @@ class KnowledgePage:
         for column, label, width in columns:
             self.source_tree.heading(column, text=label)
             self.source_tree.column(column, width=width, minwidth=55)
-        self.source_tree.grid(row=1, column=0, sticky="nsew")
+        self.source_tree.grid(row=2, column=0, sticky="nsew")
 
     def _build_conflicts(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(0, weight=1)
@@ -500,6 +529,63 @@ class KnowledgePage:
             f"Importing {source_kind} DAT...",
             lambda: self._import_dat(Path(path), source_kind),
         )
+
+    def _select_saved_pages(self) -> None:
+        choose_folder = messagebox.askyesnocancel(
+            "Import saved wiki pages",
+            "Choose Yes to import a folder, or No to select page and ZIP files.",
+            parent=self.root,
+        )
+        if choose_folder is None:
+            return
+        if choose_folder:
+            folder = filedialog.askdirectory(
+                parent=self.root,
+                title="Select folder containing saved wiki pages",
+            )
+            paths = (folder,) if folder else ()
+        else:
+            paths = filedialog.askopenfilenames(
+                parent=self.root,
+                title="Select browser-saved wiki pages or ZIP archives",
+                filetypes=(
+                    ("Saved wiki pages", "*.html *.htm *.zip"),
+                    ("All files", "*.*"),
+                ),
+            )
+        if not paths:
+            return
+        source_slugs = {
+            "ConsoleMods": "consolemods-wiki",
+            "XenonLibrary": "xenonlibrary",
+            "Free60": "free60",
+        }
+        source_slug = source_slugs[self.saved_page_source_var.get()]
+        self._run_job(
+            "Importing saved wiki pages...",
+            lambda: OfflineKnowledgeArchive(
+                database_path=self.service.database_path
+            ).import_saved_pages(paths, source_slug),
+        )
+
+    def _rebuild_offline_library(self) -> None:
+        self._run_job(
+            "Rebuilding offline library...",
+            lambda: OfflineKnowledgeArchive(
+                database_path=self.service.database_path
+            ).rebuild(),
+        )
+
+    def _open_offline_library(self) -> None:
+        archive = OfflineKnowledgeArchive(database_path=self.service.database_path)
+        try:
+            if not archive.index_path.exists():
+                archive.rebuild()
+            open_path(archive.index_path)
+        except Exception as exc:
+            messagebox.showerror(
+                "Offline library unavailable", str(exc), parent=self.root
+            )
 
     @staticmethod
     def _import_dat(path: Path, source_kind: str) -> dict[str, Any]:

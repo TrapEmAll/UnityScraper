@@ -33,7 +33,8 @@ python main.py --sync-wikis
 
 ConsoleMods and XenonLibrary pages are discovered through MediaWiki's paginated
 all-pages API, with XML sitemap discovery as an additional path. Free60 uses
-its XML sitemap. Seed pages are used only when discovery is unavailable.
+its XML sitemap. Seed pages and URLs from successful earlier cache entries are
+always retained, so a temporary discovery failure does not hide known pages.
 
 Every fetched article is cached locally and imported as a searchable knowledge
 entity with its source URL, revision snapshot, summary, and visible article
@@ -41,6 +42,45 @@ text. Pages containing words such as `outdated`, `historical`, or `obsolete`
 receive a freshness warning.
 
 Use `--wiki-limit N` to restrict each source during testing or a first sync.
+
+## Browser Verification And Offline Use
+
+ConsoleMods and XenonLibrary currently may place Cloudflare browser
+verification in front of wiki and API requests. A normal browser can work while
+the same URL returns HTTP 403 to UnityScraper. The application deliberately
+does not imitate a browser session, solve challenges, or bypass source access
+controls.
+
+When this happens UnityScraper:
+
+- reports that browser verification blocked the refresh;
+- uses a prior cached page when one exists without changing its original fetch
+  timestamp;
+- records the stale-cache state and refresh error with the source document;
+- continues importing other available sources;
+- rebuilds the offline library from every usable cached page.
+
+In the desktop **Knowledge** workspace, choose a source and use **Import Saved
+Wiki Pages**. You can select individual `.html`/`.htm` files, a folder, or a ZIP
+containing saved pages. For command-line use:
+
+```powershell
+python main.py --import-saved-wiki "C:\Saved Wikis" --saved-wiki-source consolemods-wiki
+python main.py --import-saved-wiki "C:\Saved Wikis\xenon.zip" --saved-wiki-source xenonlibrary
+python main.py --build-offline-knowledge
+```
+
+The importer accepts at most 5,000 pages, 10 MB per page, and 250 MB total per
+operation. It never executes imported HTML. Canonical URLs are accepted only
+when they match the selected source. A saved ConsoleMods TitleID or Multi-ID
+list also runs through the structured game metadata parser and still enriches
+only unknown local names or publishers.
+
+The generated `offline_knowledge/index.html` is a private, self-contained,
+dark-theme reading library. It contains readable article text, cache status,
+source links, timestamps, and license attribution. Remote scripts, styles,
+trackers, and images are not copied into rendered pages. Raw source snapshots
+remain in the application cache for provenance and future reprocessing.
 
 ## Preservation DAT Import
 
@@ -71,6 +111,9 @@ The database migration adds these normalized tables:
 - `entity_relationships`
 - `knowledge_import_runs`
 - `knowledge_conflicts`
+- `offline_archive_runs`
+- `offline_archive_documents`
+- `offline_page_import_runs`
 
 Facts are source-attributed claims. If two sources disagree, both claims can
 exist and the disagreement is recorded in `knowledge_conflicts`.
@@ -110,6 +153,7 @@ The **Knowledge** page includes:
 - details with source names and citation URLs;
 - source license, document count, fact count, and latest import status;
 - ConsoleMods ID sync and whole-wiki sync;
+- saved-page import, offline-library rebuild, and local-browser access;
 - Redump and No-Intro file import;
 - per-property source priorities, where lower numbers are preferred for
   display;
@@ -120,7 +164,8 @@ The **Knowledge** page includes:
 ## Remaining Boundaries
 
 - Source availability, access controls, and licenses can change. Failed syncs
-  are isolated per source and previously cached pages remain available.
+  are isolated per source and previously cached or manually imported pages
+  remain available.
 - Redump and No-Intro DATs are not bundled. Users obtain them from the source.
 - Wiki content is reference material, not automatically trusted repair advice.
 - Commercial game images, firmware, keys, and leaked SDK files are never

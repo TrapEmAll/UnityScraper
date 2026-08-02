@@ -13,8 +13,8 @@
   XEX identity, Title Update compatibility, preservation, and repair previews
 - [Console Sync](CONSOLE_SYNC.md) - persistent transfers, resume, snapshots,
   comparison, and verification
-- [Knowledge Sources](KNOWLEDGE_SOURCES.md) - imports, provenance, caching, and
-  source licensing
+- [Knowledge Sources](KNOWLEDGE_SOURCES.md) - imports, provenance, caching,
+  browser-verification recovery, offline viewing, and source licensing
 - [Advanced Features](ADVANCED_FEATURES.md) - rate limits, resume, diagnostics,
   portable mode, API, and conversion
 - [REST API](API.md) - authentication, endpoints, configuration, and safety

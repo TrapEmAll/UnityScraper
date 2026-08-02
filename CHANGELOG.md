@@ -7,6 +7,13 @@ Notable changes to UnityScraper are documented here. The project follows
 
 ### Added
 
+- Additive schema migration 11 for offline knowledge archive builds, rendered
+  document state, and browser-saved wiki import history.
+- A self-contained offline Knowledge library with local search, source and
+  license attribution, stale-cache labels, and script-free article pages.
+- Safe `.html`, `.htm`, folder, and ZIP imports for pages saved from
+  ConsoleMods, XenonLibrary, or Free60 in a normal browser.
+
 - Additive schema migration 10 for metadata snapshot runs, library intelligence,
   preservation reports, correction packages, hardware records, and package extractions.
 - Visual Studio 2010-inspired dark desktop theme shared by the modern and legacy
@@ -106,6 +113,16 @@ Notable changes to UnityScraper are documented here. The project follows
 - Cross-platform CI with Windows executable smoke builds.
 - Tagged-release packaging with SHA-256 checksums.
 - Contributor, security, community, and architecture documentation.
+
+### Fixed
+
+- ConsoleMods and XenonLibrary Cloudflare responses now produce actionable
+  browser-verification diagnostics instead of opaque HTTP failures.
+- Wiki refreshes retain known seed and cache URLs, preserve the original fetch
+  timestamp when falling back offline, and no longer discard successful pages
+  because another page failed.
+- Knowledge enrichment now recognizes `Unknown game` and `Unknown title` as
+  replaceable placeholders when a source provides a real title.
 
 ### Changed
 
