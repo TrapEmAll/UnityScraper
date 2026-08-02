@@ -52,6 +52,10 @@ results to Tk's main loop.
 - `unified_search.py` ranks local results across the application domains.
 - `structured_knowledge.py` extracts typed records from cached source documents
   while retaining document and source relationships.
+- `tool_catalog.py` declares supported community tools, reviewed operations,
+  platform constraints, executable discovery, saved paths, and checksums.
+- `external_tools.py` validates path contracts and runs argument vectors without
+  a command shell; detached GUI launches remain separate from captured CLI jobs.
 
 ### Domain and Adapters
 

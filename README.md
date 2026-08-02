@@ -88,10 +88,13 @@ SkunkieButt, and the GPLv3 X360 library and Le Fluffie source. See
 
 ### External Tools
 
-- Runs Xbox command-line utilities inside the desktop interface.
+- Provides a unified Tool Center for Xbox community utilities.
 - Includes XeXTool 6.3 by xorloser for basic or extended XEX information on
   Windows.
-- Supports custom executables and argument templates for other community tools.
+- Adds native workflows for extract-xiso, Xenia, and Xenia Canary.
+- Detects, verifies, and launches user-supplied Velocity, Iso2God, God2ISO,
+  Xbox Image Browser, and Le Fluffie installations.
+- Supports custom executables and argument templates for additional tools.
 - Shows the exact command, captures standard output and errors, and supports
   cancellation and timeouts.
 - Executes argument vectors directly without using a command shell.
@@ -220,7 +223,7 @@ Linux source setup:
 | Downloads | Review and manage download activity |
 | Backup Manager | Scan, install, verify, export, convert, and transfer owned content |
 | Profiles & Saves | Inventory profiles, inspect achievements, compare, snapshot, restore, and migrate to Xenia |
-| External Tools | Run XeXTool and other user-supplied command-line utilities |
+| Tool Center | Run and manage supported Xbox 360 community utilities |
 | Collections | Identify storage, compare Title Updates, verify preservation data, and preview repairs |
 | Knowledge | Search sources, facts, citations, imports, and conflicts |
 | Community Hub | Unified search, console plans, profiles, preservation, plugins, recovery, compatibility, and release toolkit |

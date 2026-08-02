@@ -28,6 +28,14 @@ class ToolResult:
     cancelled: bool
 
 
+@dataclass(frozen=True)
+class ToolLaunch:
+    """Details for a detached graphical tool launch."""
+
+    command: tuple[str, ...]
+    pid: int
+
+
 def split_arguments(value: str, *, windows: bool | None = None) -> list[str]:
     """Split an editable argument template without passing it through a shell."""
     use_windows_rules = os.name == "nt" if windows is None else windows
@@ -64,13 +72,15 @@ class ExternalToolRunner:
         *,
         input_path: str | Path | None = None,
         output_path: str | Path | None = None,
+        input_kind: str = "file",
+        output_kind: str = "optional",
     ) -> tuple[str, ...]:
         tool = Path(executable).expanduser().resolve()
         if not tool.is_file():
             raise ExternalToolError(f"Tool executable was not found: {tool}")
 
-        source = self._resolve_input(input_path)
-        output = self._resolve_output(output_path)
+        source = self._resolve_input(input_path, input_kind)
+        output = self._resolve_output(output_path, output_kind)
         arguments: list[str] = []
         for value in argument_template:
             if "{input}" in value and source is None:
@@ -83,6 +93,40 @@ class ExternalToolRunner:
             )
         return (str(tool), *arguments)
 
+    def launch_detached(
+        self,
+        executable: str | Path,
+        argument_template: Iterable[str] = (),
+        *,
+        input_path: str | Path | None = None,
+        output_path: str | Path | None = None,
+        input_kind: str = "none",
+        output_kind: str = "none",
+    ) -> ToolLaunch:
+        """Launch a GUI utility without waiting for it to exit."""
+        command = self.build_command(
+            executable,
+            argument_template,
+            input_path=input_path,
+            output_path=output_path,
+            input_kind=input_kind,
+            output_kind=output_kind,
+        )
+        creation_flags = 0
+        if os.name == "nt":
+            creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
+        try:
+            process = subprocess.Popen(
+                command,
+                cwd=Path(command[0]).parent,
+                shell=False,
+                creationflags=creation_flags,
+                close_fds=os.name != "nt",
+            )
+        except OSError as exc:
+            raise ExternalToolError(f"Could not start external tool: {exc}") from exc
+        return ToolLaunch(command, process.pid)
+
     def run(
         self,
         executable: str | Path,
@@ -91,14 +135,18 @@ class ExternalToolRunner:
         input_path: str | Path | None = None,
         output_path: str | Path | None = None,
         timeout: float = 300,
+        input_kind: str = "file",
+        output_kind: str = "optional",
     ) -> ToolResult:
         command = self.build_command(
             executable,
             argument_template,
             input_path=input_path,
             output_path=output_path,
+            input_kind=input_kind,
+            output_kind=output_kind,
         )
-        source = self._resolve_input(input_path)
+        source = self._resolve_input(input_path, input_kind)
         working_directory = source.parent if source else Path(command[0]).parent
         creation_flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         started = time.monotonic()
@@ -153,19 +201,37 @@ class ExternalToolRunner:
             return True
 
     @staticmethod
-    def _resolve_input(value: str | Path | None) -> Path | None:
+    def _resolve_input(value: str | Path | None, kind: str = "file") -> Path | None:
+        if kind not in {"file", "directory", "any", "optional", "none"}:
+            raise ExternalToolError(f"Unsupported input path kind: {kind}")
+        if kind == "none":
+            return None
         if value is None or not str(value).strip():
+            if kind not in {"none", "optional"}:
+                raise ExternalToolError("This command requires an input path")
             return None
         path = Path(value).expanduser().resolve()
-        if not path.is_file():
+        if kind == "file" and not path.is_file():
             raise ExternalToolError(f"Input file was not found: {path}")
+        if kind == "directory" and not path.is_dir():
+            raise ExternalToolError(f"Input folder was not found: {path}")
+        if kind in {"any", "optional"} and not path.exists():
+            raise ExternalToolError(f"Input path was not found: {path}")
         return path
 
     @staticmethod
-    def _resolve_output(value: str | Path | None) -> Path | None:
+    def _resolve_output(value: str | Path | None, kind: str = "file") -> Path | None:
+        if kind not in {"file", "directory", "optional", "none"}:
+            raise ExternalToolError(f"Unsupported output path kind: {kind}")
+        if kind == "none":
+            return None
         if value is None or not str(value).strip():
+            if kind not in {"none", "optional"}:
+                raise ExternalToolError("This command requires an output path")
             return None
         path = Path(value).expanduser().resolve()
-        if not path.parent.is_dir():
+        if kind == "directory" and not path.is_dir():
+            raise ExternalToolError(f"Output folder was not found: {path}")
+        if kind != "directory" and not path.parent.is_dir():
             raise ExternalToolError(f"Output folder was not found: {path.parent}")
         return path

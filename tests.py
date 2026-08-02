@@ -34,6 +34,7 @@ from external_tools import (
     split_arguments,
 )
 from external_tools_gui import bundled_xextool_path
+from tool_catalog import ToolCatalog, operation_for
 from knowledge_service import KnowledgeService
 from knowledge_sources import (
     CachedHttpClient,
@@ -719,6 +720,102 @@ class TestExternalTools(unittest.TestCase):
                 ["{input}"],
                 input_path=Path(self.temp_dir) / "missing.xex",
             )
+
+    def test_runner_supports_directory_input_and_output(self):
+        runner = ExternalToolRunner()
+        source = Path(self.temp_dir) / "source"
+        output = Path(self.temp_dir) / "output"
+        source.mkdir()
+        output.mkdir()
+
+        command = runner.build_command(
+            sys.executable,
+            ["{input}", "{output}"],
+            input_path=source,
+            output_path=output,
+            input_kind="directory",
+            output_kind="directory",
+        )
+
+        self.assertEqual(command[1:], (str(source.resolve()), str(output.resolve())))
+
+    def test_unused_paths_are_ignored_for_launch_only_operations(self):
+        runner = ExternalToolRunner()
+
+        command = runner.build_command(
+            sys.executable,
+            (),
+            input_path=Path(self.temp_dir) / "stale-missing-input",
+            output_path=Path(self.temp_dir) / "stale-missing-output",
+            input_kind="none",
+            output_kind="none",
+        )
+
+        self.assertEqual(command, (str(Path(sys.executable).resolve()),))
+
+    def test_catalog_contains_requested_tools_and_excludes_omissions(self):
+        catalog = ToolCatalog(Path(self.temp_dir) / "config.json")
+        tool_ids = {tool.id for tool in catalog.definitions()}
+
+        self.assertTrue(
+            {
+                "xextool",
+                "extract-xiso",
+                "xenia",
+                "xenia-canary",
+                "velocity",
+                "iso2god",
+                "god2iso",
+                "xbox-image-browser",
+                "le-fluffie",
+                "custom",
+            }.issubset(tool_ids)
+        )
+        self.assertNotIn("fatxplorer", tool_ids)
+        self.assertNotIn("j-runner", tool_ids)
+
+    def test_extract_xiso_operations_are_explicit_and_guarded(self):
+        tool = ToolCatalog(Path(self.temp_dir) / "config.json").get("extract-xiso")
+        extract = operation_for(tool, "extract")
+        rewrite = operation_for(tool, "rewrite")
+        xextool = ToolCatalog(Path(self.temp_dir) / "config.json").get("xextool")
+        custom = operation_for(xextool, "custom")
+
+        self.assertEqual(extract.arguments, ("-x", "{input}", "-d", "{output}"))
+        self.assertEqual((extract.input_kind, extract.output_kind), ("file", "directory"))
+        self.assertTrue(rewrite.destructive)
+        self.assertTrue(custom.destructive)
+
+    def test_catalog_persists_and_hashes_user_selected_executable(self):
+        config_path = Path(self.temp_dir) / "config.json"
+        executable = Path(self.temp_dir) / "extract-xiso.exe"
+        executable.write_bytes(b"test executable")
+        catalog = ToolCatalog(config_path)
+
+        saved = catalog.save_path("extract-xiso", executable)
+
+        self.assertEqual(saved, executable.resolve())
+        self.assertEqual(catalog.configured_path("extract-xiso"), executable.resolve())
+        self.assertEqual(
+            catalog.checksum(executable),
+            hashlib.sha256(b"test executable").hexdigest().upper(),
+        )
+
+    @patch("external_tools.subprocess.Popen")
+    def test_detached_launch_uses_argument_vector(self, popen):
+        popen.return_value.pid = 360
+        runner = ExternalToolRunner()
+
+        launched = runner.launch_detached(
+            sys.executable,
+            ("{input}",),
+            input_path=self.input_path,
+            input_kind="file",
+        )
+
+        self.assertEqual(launched.pid, 360)
+        self.assertEqual(launched.command[1], str(self.input_path.resolve()))
+        self.assertFalse(popen.call_args.kwargs["shell"])
 
     def test_command_preview_quotes_paths(self):
         preview = format_command(

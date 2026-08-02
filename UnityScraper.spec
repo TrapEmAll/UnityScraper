@@ -41,6 +41,7 @@ a = Analysis(
         'knowledge_scheduler',
         'knowledge_sync',
         'structured_knowledge',
+        'tool_catalog',
         'unified_search',
         'plugins',
         'plugin_worker',

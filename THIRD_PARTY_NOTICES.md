@@ -38,3 +38,26 @@ UnityScraper does not include Le Fluffie's executable, updater, embedded key
 resources, account-modification code, or artwork. The application credits
 Dalavin prominently and links to the archived corresponding source.
 
+## Tool Center Interoperability
+
+The following projects are supported through user-selected executables. Their
+binaries and licenses are not bundled by UnityScraper:
+
+- **extract-xiso**, XboxDev: <https://github.com/XboxDev/extract-xiso>
+- **Xenia**, Xenia Project: <https://github.com/xenia-project/xenia>
+- **Xenia Canary**, Xenia Canary Project:
+  <https://github.com/xenia-canary/xenia-canary>
+- **Velocity**, Velocity contributors:
+  <https://github.com/Gualdimar/Velocity> (archived GPL-3.0 project)
+- **Iso2God**, Iso2God contributors: <https://github.com/r4dius/Iso2God>
+
+Tool Center can also launch user-supplied God2ISO and Xbox Image Browser
+installations. These legacy utilities have varied distribution histories, so
+UnityScraper does not bundle them or claim a canonical download. Users are
+responsible for obtaining lawful copies and reviewing the terms that accompany
+their chosen builds.
+
+An integration means that UnityScraper can locate or launch a program; it does
+not imply endorsement by, affiliation with, or redistribution permission from
+the program's authors.
+
