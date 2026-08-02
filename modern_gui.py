@@ -411,7 +411,7 @@ class UnityScraperDesktop:
         view_menu.add_command(label="Community Hub", command=self.show_community_hub)
         tools_menu = tk.Menu(self.root, tearoff=False, **menu_options)
         tools_menu.add_command(label="Backup Manager", command=self.show_backups)
-        tools_menu.add_command(label="External Tools", command=self.show_external_tools)
+        tools_menu.add_command(label="Tool Center", command=self.show_external_tools)
         tools_menu.add_command(label="Archive Health", command=self.show_health)
         tools_menu.add_command(label="Settings", command=self.show_settings)
         help_menu = tk.Menu(self.root, tearoff=False, **menu_options)

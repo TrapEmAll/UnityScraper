@@ -75,7 +75,7 @@ TRANSLATIONS = {
         'nav_downloads': 'DOWNLOADS',
         'nav_backups': 'BACKUP MANAGER',
         'nav_profiles': 'PROFILES & SAVES',
-        'nav_tools': 'EXTERNAL TOOLS',
+        'nav_tools': 'TOOL CENTER',
         'nav_collections': 'COLLECTIONS',
         'nav_knowledge': 'KNOWLEDGE',
         'nav_community': 'COMMUNITY HUB',

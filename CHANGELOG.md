@@ -7,6 +7,13 @@ Notable changes to UnityScraper are documented here. The project follows
 
 ### Added
 
+- A catalog-backed Tool Center with persistent executable discovery, SHA-256
+  identification, platform-aware availability, command previews, and CLI parity.
+- Native extract-xiso list, extract, create, and guarded rewrite workflows,
+  plus direct Xenia and Xenia Canary launching.
+- Managed launch integrations for user-supplied Velocity, Iso2God, God2ISO,
+  Xbox Image Browser, and Le Fluffie installations.
+
 - Additive schema migration 11 for offline knowledge archive builds, rendered
   document state, and browser-saved wiki import history.
 - A self-contained offline Knowledge library with local search, source and

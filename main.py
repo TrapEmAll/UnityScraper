@@ -1052,6 +1052,24 @@ def main():
         type=str,
         help='Output directory for --convert-iso'
     )
+    parser.add_argument('--list-tools', action='store_true',
+                        help='List supported community tool integrations')
+    parser.add_argument('--tool-id', type=str,
+                        help='Run a Tool Center integration by ID')
+    parser.add_argument('--tool-operation', type=str,
+                        help='Operation ID used with --tool-id')
+    parser.add_argument('--tool-executable', type=str,
+                        help='Executable override used with --tool-id')
+    parser.add_argument('--tool-input', type=str,
+                        help='Input file or folder used with --tool-id')
+    parser.add_argument('--tool-output', type=str,
+                        help='Output file or folder used with --tool-id')
+    parser.add_argument('--tool-arg', action='append', default=[],
+                        help='Override Tool Center argument; may be repeated')
+    parser.add_argument('--tool-timeout', type=int, default=3600,
+                        help='Tool Center timeout in seconds')
+    parser.add_argument('--tool-allow-modify', action='store_true',
+                        help='Confirm a Tool Center operation that modifies its input')
     parser.add_argument('--analyze-collection', type=str, help='Analyze a local collection root')
     parser.add_argument('--aurora-db', type=str, help='Analyze an Aurora database read-only')
     parser.add_argument('--collection-manifest', type=str, help='Write a preservation manifest')
@@ -1121,6 +1139,70 @@ def main():
         logger.info("Configuration saved")
     
     # Initialize scraper
+    if args.list_tools or args.tool_id:
+        try:
+            from external_tools import ExternalToolRunner, format_command
+            from tool_catalog import ToolCatalog, operation_for
+
+            catalog = ToolCatalog(CONFIG_PATH)
+            if args.list_tools:
+                for tool in catalog.definitions():
+                    state = "ready" if catalog.discover(tool.id) else "not configured"
+                    operations = ", ".join(item.id for item in tool.operations)
+                    print(f"{tool.id:20} {state:14} {operations}")
+                sys.exit(0)
+            tool = catalog.get(args.tool_id)
+            if not args.tool_operation:
+                parser.error("--tool-operation is required with --tool-id")
+            operation = operation_for(tool, args.tool_operation)
+            if (operation.destructive or args.tool_arg) and not args.tool_allow_modify:
+                parser.error(
+                    "this operation or argument override may modify content; pass "
+                    "--tool-allow-modify after making a backup"
+                )
+            executable = (
+                Path(args.tool_executable).expanduser().resolve()
+                if args.tool_executable
+                else catalog.discover(tool.id)
+            )
+            if executable is None:
+                raise FileNotFoundError(
+                    f"{tool.name} is not configured; choose it in Tool Center"
+                )
+            if args.tool_executable:
+                catalog.save_path(tool.id, executable)
+            arguments = tuple(args.tool_arg) if args.tool_arg else operation.arguments
+            runner = ExternalToolRunner()
+            if operation.detached:
+                result = runner.launch_detached(
+                    executable,
+                    arguments,
+                    input_path=args.tool_input,
+                    output_path=args.tool_output,
+                    input_kind=operation.input_kind,
+                    output_kind=operation.output_kind,
+                )
+                print(f"Launched PID {result.pid}: {format_command(result.command)}")
+            else:
+                result = runner.run(
+                    executable,
+                    arguments,
+                    input_path=args.tool_input,
+                    output_path=args.tool_output,
+                    timeout=max(1, args.tool_timeout),
+                    input_kind=operation.input_kind,
+                    output_kind=operation.output_kind,
+                )
+                if result.stdout:
+                    print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
+                if result.stderr:
+                    print(result.stderr, file=sys.stderr)
+                sys.exit(result.returncode)
+            sys.exit(0)
+        except Exception as e:
+            logger.error("Tool Center operation failed: %s", e)
+            sys.exit(1)
+
     if args.sync_title_catalog:
         try:
             from title_catalog import XboxUnityTitleCatalog

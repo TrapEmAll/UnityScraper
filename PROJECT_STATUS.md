@@ -77,6 +77,9 @@ backup-management, and source-attributed knowledge application.
   parity for search and preservation, FATX geometry reports, and bounded STFS
   file-table inventory.
 - Windows, Linux, and unsigned Apple Silicon macOS CI packaging.
+- Catalog-backed Tool Center with native extract-xiso and Xenia workflows,
+  managed launch support for selected legacy GUI utilities, executable
+  discovery, checksums, CLI parity, and destructive-operation confirmation.
 
 ## Validation
 
