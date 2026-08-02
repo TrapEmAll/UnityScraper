@@ -105,26 +105,33 @@ class SitemapWikiAdapter:
         self,
         client: CachedHttpClient | None = None,
         max_documents: int | None = None,
+        known_urls: Iterable[str] = (),
     ) -> None:
         self.client = client or CachedHttpClient(rate_limit_seconds=1.0)
         self.max_documents = max_documents
+        self.known_urls = tuple(known_urls)
+        self.errors: list[str] = []
 
     def fetch_documents(self) -> Iterable[SourceDocument]:
         urls = self._discover_urls()
         if self.max_documents is not None:
             urls = urls[: max(self.max_documents, 0)]
         errors: list[str] = []
+        self.errors = errors
+        yielded = 0
         for url in urls:
             try:
-                yield self.client.get_text(
+                document = self.client.get_text(
                     url,
                     title=_title_from_url(url),
                     document_type="wiki_article",
                 )
+                yielded += 1
+                yield document
             except Exception as exc:
                 errors.append(f"{url}: {exc}")
                 continue
-        if errors:
+        if errors and not yielded:
             preview = "; ".join(errors[:5])
             if len(errors) > 5:
                 preview += f"; and {len(errors) - 5} more"
@@ -168,7 +175,15 @@ class SitemapWikiAdapter:
         return ParsedDocument(document, (record,))
 
     def _discover_urls(self) -> list[str]:
-        discovered: set[str] = set()
+        discovered: set[str] = {
+            url for url in self.seed_urls if self._allowed(url)
+        }
+        discovered.update(url for url in self.known_urls if self._allowed(url))
+        discovered.update(
+            url
+            for url in self.client.cached_urls(self.allowed_hosts)
+            if self._allowed(url)
+        )
         discovered.update(self._discover_mediawiki_urls())
         pending = list(self.sitemap_urls)
         visited: set[str] = set()
@@ -190,8 +205,6 @@ class SitemapWikiAdapter:
             pending.extend(url for url in child_sitemaps if url not in visited)
             discovered.update(url for url in page_urls if self._allowed(url))
 
-        if not discovered:
-            discovered.update(url for url in self.seed_urls if self._allowed(url))
         return sorted(discovered)
 
     def _discover_mediawiki_urls(self) -> list[str]:

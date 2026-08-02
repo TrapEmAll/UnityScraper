@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 def _now() -> str:
@@ -71,6 +71,7 @@ def ensure_application_schema(connection: sqlite3.Connection) -> int:
         (8, "community roadmap workspaces", _migration_community_roadmap),
         (9, "hardening and plugin runtime", _migration_hardening),
         (10, "release readiness workspaces", _migration_release_readiness),
+        (11, "offline knowledge archive", _migration_offline_knowledge),
     )
     for version, name, migration in migrations:
         if version in applied:
@@ -802,6 +803,42 @@ def _migration_release_readiness(connection: sqlite3.Connection) -> None:
             skipped_count INTEGER NOT NULL DEFAULT 0,
             manifest_path TEXT,
             status TEXT NOT NULL
+        );
+        """
+    )
+
+
+def _migration_offline_knowledge(connection: sqlite3.Connection) -> None:
+    """Track generated offline pages and user-provided wiki imports."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS offline_archive_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            status TEXT NOT NULL,
+            documents_written INTEGER NOT NULL DEFAULT 0,
+            index_path TEXT,
+            errors TEXT
+        );
+        CREATE TABLE IF NOT EXISTS offline_archive_documents (
+            document_id INTEGER PRIMARY KEY,
+            archive_path TEXT NOT NULL,
+            rendered_at TEXT NOT NULL,
+            content_sha256 TEXT NOT NULL,
+            stale INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY(document_id) REFERENCES source_documents(id)
+        );
+        CREATE TABLE IF NOT EXISTS offline_page_import_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_slug TEXT NOT NULL,
+            source_path TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            status TEXT NOT NULL,
+            files_seen INTEGER NOT NULL DEFAULT 0,
+            files_imported INTEGER NOT NULL DEFAULT 0,
+            errors TEXT
         );
         """
     )

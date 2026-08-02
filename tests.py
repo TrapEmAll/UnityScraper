@@ -35,7 +35,13 @@ from external_tools import (
 )
 from external_tools_gui import bundled_xextool_path
 from knowledge_service import KnowledgeService
-from knowledge_sources import KnowledgeImportService, SourceInfo
+from knowledge_sources import (
+    CachedHttpClient,
+    KnowledgeImportService,
+    SourceAccessBlockedError,
+    SourceInfo,
+)
+from offline_knowledge import OfflineKnowledgeArchive
 from library_service import LibraryService
 from modern_gui import LE_FLUFFIE_CREATOR, XEXTOOL_CREATOR, navigation_shortcut
 from title_catalog import XboxUnityTitleCatalog
@@ -915,6 +921,115 @@ class TestKnowledgeApplication(unittest.TestCase):
         self.assertIn("source unavailable", run["errors"])
 
 
+class TestOfflineKnowledgeArchive(unittest.TestCase):
+    """Test blocked-source fallback, saved-page import, and local rendering."""
+
+    def setUp(self):
+        self.temp_dir = Path(tempfile.mkdtemp())
+        self.db_path = self.temp_dir / "knowledge.db"
+        self.cache_dir = self.temp_dir / "cache"
+        self.output_dir = self.temp_dir / "offline"
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir)
+
+    @staticmethod
+    def _response(status: int, text: str, url: str):
+        response = Mock()
+        response.status_code = status
+        response.text = text
+        response.url = url
+        response.headers = {"Server": "cloudflare"} if status != 200 else {}
+        if status == 200:
+            response.raise_for_status.return_value = None
+        return response
+
+    def test_browser_challenge_uses_cache_and_preserves_fetch_time(self):
+        url = "https://xenonlibrary.com/wiki/Motherboard"
+        session = Mock()
+        session.get.side_effect = (
+            self._response(200, "<html><h1>Motherboard</h1><p>Known data.</p></html>", url),
+            self._response(403, "<html><title>Just a moment</title></html>", url),
+        )
+        client = CachedHttpClient(
+            cache_dir=self.cache_dir,
+            rate_limit_seconds=0,
+            session=session,
+        )
+        fresh = client.get_text(url, "Motherboard", "wiki_article")
+        cached = client.get_text(url, "Motherboard", "wiki_article")
+        cached_again = client.get_text(url, "Motherboard", "wiki_article")
+        self.assertTrue(cached.from_cache)
+        self.assertTrue(cached_again.from_cache)
+        self.assertEqual(cached.fetched_at, fresh.fetched_at)
+        self.assertIn("browser verification", cached.fetch_error)
+        self.assertEqual(session.get.call_count, 2)
+        self.assertEqual(client.cached_urls(("xenonlibrary.com",)), [url])
+
+    def test_browser_challenge_without_cache_has_actionable_error(self):
+        url = "https://consolemods.org/wiki/Xbox_360:Main_Page"
+        session = Mock()
+        session.get.return_value = self._response(
+            403, "<html><title>Just a moment</title></html>", url
+        )
+        client = CachedHttpClient(
+            cache_dir=self.cache_dir,
+            rate_limit_seconds=0,
+            session=session,
+        )
+        with self.assertRaisesRegex(SourceAccessBlockedError, "Import Saved Wiki Pages"):
+            client.get_text(url, "Xbox 360", "wiki_article")
+
+    def test_saved_page_import_builds_script_free_offline_article(self):
+        saved = self.temp_dir / "motherboard.html"
+        saved.write_text(
+            """<html><head><title>Motherboard - XenonLibrary</title>
+            <link rel="canonical" href="https://xenonlibrary.com/wiki/Motherboard">
+            <script src="https://tracker.invalid/a.js"></script></head>
+            <body><h1>Motherboard</h1><p>Board revision reference.</p></body></html>""",
+            encoding="utf-8",
+        )
+        archive = OfflineKnowledgeArchive(
+            database_path=self.db_path,
+            output_dir=self.output_dir,
+            cache_dir=self.cache_dir,
+        )
+        summary = archive.import_saved_pages(saved, "xenonlibrary")
+        self.assertEqual(summary["records_imported"], 1)
+        self.assertTrue(archive.index_path.exists())
+        index = archive.index_path.read_text(encoding="utf-8")
+        self.assertIn("Motherboard", index)
+        article_path = next((self.output_dir / "pages" / "xenonlibrary").glob("*.html"))
+        article = article_path.read_text(encoding="utf-8")
+        self.assertIn("Board revision reference.", article)
+        self.assertNotIn("tracker.invalid", article)
+        self.assertIn("https://xenonlibrary.com/wiki/Motherboard", article)
+
+    def test_saved_consolemods_title_list_enriches_unknown_game(self):
+        saved = self.temp_dir / "titleids.html"
+        saved.write_text(
+            """<html><head><title>List of Every Xbox 360 Title ID</title>
+            <link rel="canonical" href="https://consolemods.org/wiki/Xbox_360:List_of_Every_Xbox_360_Title_ID">
+            </head><body><h2>SQ (5351) --&gt; Square Enix</h2>
+            <h3>SQ-2052 (53510804)</h3><p>Hitman: Absolution</p></body></html>""",
+            encoding="utf-8",
+        )
+        database = DatabaseManager(str(self.db_path))
+        database.add_titleid("53510804", "Unknown game", "Unknown Publisher")
+        archive = OfflineKnowledgeArchive(
+            database_path=self.db_path,
+            output_dir=self.output_dir,
+            cache_dir=self.cache_dir,
+        )
+        summary = archive.import_saved_pages(saved, "consolemods-wiki")
+        self.assertEqual(summary["titleids_enriched"], 1)
+        row = database.get_titleid_info("53510804")
+        self.assertIsNotNone(row)
+        assert row is not None
+        self.assertEqual(row["name"], "Hitman: Absolution")
+        self.assertEqual(row["publisher"], "Square Enix")
+
+
 class TestDownloadProgress(unittest.TestCase):
     """Test download progress tracking"""
     
@@ -1755,7 +1870,10 @@ class TestUnifiedV1Foundation(unittest.TestCase):
             versions = connection.execute(
                 "SELECT version FROM app_schema_migrations ORDER BY version"
             ).fetchall()
-        self.assertEqual([row[0] for row in versions], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+        self.assertEqual(
+            [row[0] for row in versions],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+        )
         self.assertIn("collection_snapshots", tables)
         self.assertIn("preservation_matches", tables)
         self.assertIn("console_transfer_jobs", tables)
@@ -1776,6 +1894,9 @@ class TestUnifiedV1Foundation(unittest.TestCase):
         self.assertIn("library_intelligence_runs", tables)
         self.assertIn("preservation_report_runs", tables)
         self.assertIn("hardware_inventory_records", tables)
+        self.assertIn("offline_archive_runs", tables)
+        self.assertIn("offline_archive_documents", tables)
+        self.assertIn("offline_page_import_runs", tables)
 
     def test_release_readiness_toolkit_exports_portable_nonpersonal_metadata(self):
         import sqlite3

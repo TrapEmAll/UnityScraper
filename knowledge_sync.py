@@ -61,10 +61,37 @@ def sync_reference_wikis(
     """Import searchable Xbox 360 wiki articles with per-source isolation."""
     db = db or DatabaseManager()
     client = CachedHttpClient(cache_dir=cache_dir)
+    with db.get_connection() as connection:
+        known_by_source = {
+            slug: tuple(
+                row[0]
+                for row in connection.execute(
+                    """
+                    SELECT d.url FROM source_documents d
+                    JOIN knowledge_sources s ON s.id=d.source_id
+                    WHERE s.slug=? AND d.document_type='wiki_article'
+                    """,
+                    (slug,),
+                ).fetchall()
+            )
+            for slug in ("consolemods-wiki", "xenonlibrary", "free60")
+        }
     adapters = (
-        ConsoleModsWikiAdapter(client, max_documents=max_documents_per_source),
-        XenonLibraryWikiAdapter(client, max_documents=max_documents_per_source),
-        Free60WikiAdapter(client, max_documents=max_documents_per_source),
+        ConsoleModsWikiAdapter(
+            client,
+            max_documents=max_documents_per_source,
+            known_urls=known_by_source["consolemods-wiki"],
+        ),
+        XenonLibraryWikiAdapter(
+            client,
+            max_documents=max_documents_per_source,
+            known_urls=known_by_source["xenonlibrary"],
+        ),
+        Free60WikiAdapter(
+            client,
+            max_documents=max_documents_per_source,
+            known_urls=known_by_source["free60"],
+        ),
     )
     summaries: list[dict[str, Any]] = []
 
@@ -86,7 +113,17 @@ def sync_reference_wikis(
                     "records_imported": 0,
                 }
             )
-    return {"adapters": summaries}
+    try:
+        from offline_knowledge import OfflineKnowledgeArchive
+
+        archive = OfflineKnowledgeArchive(
+            database_path=db.db_path,
+            cache_dir=cache_dir,
+        ).rebuild()
+    except Exception as exc:
+        logger.exception("Offline knowledge archive rebuild failed")
+        archive = {"status": "failed", "error": str(exc)}
+    return {"adapters": summaries, "offline_archive": archive}
 
 
 def import_dat_knowledge(

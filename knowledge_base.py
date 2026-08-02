@@ -17,7 +17,16 @@ from typing import Any, Iterable
 
 logger = logging.getLogger(__name__)
 
-UNKNOWN_VALUES = {"", "unknown", "unknown publisher", "n/a", "none", "null"}
+UNKNOWN_VALUES = {
+    "",
+    "unknown",
+    "unknown game",
+    "unknown title",
+    "unknown publisher",
+    "n/a",
+    "none",
+    "null",
+}
 
 
 def utc_now() -> str:

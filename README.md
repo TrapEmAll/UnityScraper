@@ -35,6 +35,8 @@ service exposes. UnityScraper does not silently substitute HTTPS URLs.
 - Imports TitleID, publisher, region, and Multi-ID references from ConsoleMods.
 - Caches and indexes Xbox 360 articles from ConsoleMods, XenonLibrary, and
   Free60.
+- Builds a searchable, self-contained offline library from cached or
+  browser-saved wiki pages.
 - Imports user-supplied Redump and No-Intro XML DAT files.
 - Stores entities, identifiers, facts, citations, revisions, import runs, and
   conflicts with provenance.
@@ -299,9 +301,24 @@ python main.py --sync-wikis
 # Limit a first test sync per source
 python main.py --sync-wikis --wiki-limit 25
 
+# Build or refresh the local offline reading library
+python main.py --build-offline-knowledge
+
+# Import a page, folder, or ZIP saved in a browser when a wiki blocks automation
+python main.py --import-saved-wiki "C:\Saved Wikis" --saved-wiki-source xenonlibrary
+
 # Import a user-downloaded preservation DAT
 python main.py --import-dat "D:\DATs\xbox360.dat" --dat-source redump
 ```
+
+ConsoleMods and XenonLibrary may require Cloudflare browser verification and
+return HTTP 403 to command-line clients. UnityScraper does not bypass that
+protection. It continues using the last successful cache and identifies the
+blocked source clearly. In the **Knowledge** workspace, use **Import Saved Wiki
+Pages** for pages saved through a normal browser, then **Open Offline Library**
+to browse the local copy. The offline renderer keeps article text, source
+links, timestamps, and license attribution while excluding remote scripts and
+trackers.
 
 ### Backup Manager
 
