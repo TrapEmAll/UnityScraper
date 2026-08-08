@@ -1,0 +1,2 @@
+"""Managed plugin domain."""
+

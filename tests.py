@@ -9,6 +9,7 @@ import shutil
 import json
 import hashlib
 import os
+import sqlite3
 import sys
 import time
 import zipfile
@@ -62,12 +63,16 @@ from backup_manager import (
     package_destination,
     scan_local_target,
 )
-from backup_service import BackupRepository
+from backup_service import BackupRepository, BackupService
 from api import UnityScraperAPI
 from app_version import DISPLAY_VERSION
 from app_paths import resolve_storage_paths
 from platform_support import desktop_font_family, path_opener_command
 from profile_manager import ProfileSaveManager, find_content_root, mask_identifier
+from unityscraper.core.db import MigrationRegistry
+from unityscraper.core.jobs import JobProgress, JobResult
+from unityscraper.domains.backups.service import BackupService as ModularBackupService
+from unityscraper.domains.library.service import LibraryService as ModularLibraryService
 
 
 class TestPlatformSupport(unittest.TestCase):
@@ -185,6 +190,61 @@ class TestPlatformSupport(unittest.TestCase):
             root.findtext("id"),
             "io.github.trapemall.UnityScraper",
         )
+
+
+class TestModularFoundation(unittest.TestCase):
+    """Test package-level adapters that support the modular architecture."""
+
+    def test_domain_service_exports_preserve_existing_implementations(self):
+        self.assertIs(ModularBackupService, BackupService)
+        self.assertIs(ModularLibraryService, LibraryService)
+
+    def test_job_progress_percent_is_bounded(self):
+        self.assertEqual(
+            JobProgress(status="running", message="working", current=5, total=10).percent,
+            50.0,
+        )
+        self.assertEqual(
+            JobProgress(status="running", message="over", current=15, total=10).percent,
+            100.0,
+        )
+        self.assertIsNone(JobProgress(status="running", message="unknown").percent)
+
+    def test_job_result_factories_set_terminal_state(self):
+        completed = JobResult.completed("done", count=2)
+        failed = JobResult.failed("failed", reason="example")
+
+        self.assertEqual(completed.status, "completed")
+        self.assertEqual(completed.payload["count"], 2)
+        self.assertIsNotNone(completed.finished_at)
+        self.assertEqual(failed.status, "failed")
+        self.assertEqual(failed.payload["reason"], "example")
+        self.assertIsNotNone(failed.finished_at)
+
+    def test_domain_migration_registry_applies_once(self):
+        calls = []
+
+        def migration(connection):
+            calls.append("applied")
+            connection.execute("CREATE TABLE example_domain_table (id INTEGER PRIMARY KEY)")
+
+        registry = MigrationRegistry()
+        registry.register(domain="example", version=1, name="example schema", apply=migration)
+
+        with sqlite3.connect(":memory:") as connection:
+            first = registry.apply(connection)
+            second = registry.apply(connection)
+            table = connection.execute(
+                """
+                SELECT name FROM sqlite_master
+                WHERE type = 'table' AND name = 'example_domain_table'
+                """
+            ).fetchone()
+
+        self.assertEqual([item.key for item in first], ["example:1"])
+        self.assertEqual(second, [])
+        self.assertEqual(calls, ["applied"])
+        self.assertIsNotNone(table)
 
 
 class TestConfig(unittest.TestCase):
@@ -2432,6 +2492,7 @@ def run_tests():
 
     # Add all test classes
     suite.addTests(loader.loadTestsFromTestCase(TestPlatformSupport))
+    suite.addTests(loader.loadTestsFromTestCase(TestModularFoundation))
     suite.addTests(loader.loadTestsFromTestCase(TestConfig))
     suite.addTests(loader.loadTestsFromTestCase(TestRateLimiter))
     suite.addTests(loader.loadTestsFromTestCase(TestUnityScraper))
