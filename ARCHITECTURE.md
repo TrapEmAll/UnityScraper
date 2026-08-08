@@ -11,6 +11,27 @@ for CLI and optional REST automation. SQLite is the durable local store.
 | `main.py` | XboxUnity, knowledge, backup, export, and API CLI |
 | `GUI.py` | Legacy advanced scraper controls |
 | `api.py` | Optional local automation API |
+| `unityscraper.app.desktop.entrypoint` | Package entry point for installed desktop launches |
+| `unityscraper.app.cli.entrypoint` | Package entry point for installed CLI launches |
+
+The top-level entry points remain supported while the codebase moves into the
+`unityscraper` package. See [Modularization plan](MODULARIZATION_PLAN.md).
+
+## Package Direction
+
+New code should prefer the package layout:
+
+```text
+unityscraper/
+  app/       desktop, CLI, and API adapters
+  core/      shared paths, jobs, database contracts, and infrastructure
+  domains/   feature-owned library, knowledge, backup, profile, package,
+             collection, console sync, tool, and plugin modules
+```
+
+Domain modules should own business workflows and schema changes. Desktop pages,
+REST routes, and CLI commands should call domain use cases instead of owning
+filesystem, FTP, package, or database behavior directly.
 
 ## Layers
 

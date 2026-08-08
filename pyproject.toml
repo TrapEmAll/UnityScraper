@@ -20,6 +20,10 @@ Homepage = "https://github.com/TrapEmAll/UnityScraper"
 Issues = "https://github.com/TrapEmAll/UnityScraper/issues"
 Releases = "https://github.com/TrapEmAll/UnityScraper/releases"
 
+[project.scripts]
+unityscraper = "unityscraper.app.desktop.entrypoint:main"
+unityscraper-cli = "unityscraper.app.cli.entrypoint:main"
+
 [tool.pytest.ini_options]
 testpaths = ["tests.py"]
 addopts = "-ra"

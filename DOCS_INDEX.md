@@ -35,6 +35,8 @@
 
 - [Architecture](ARCHITECTURE.md) - modules, layers, schemas, data flows, and
   packaging
+- [Modularization Plan](MODULARIZATION_PLAN.md) - package boundaries, domain
+  ownership, and the incremental AIO refactor path
 - [Plugin API v1](PLUGIN_API.md) - manifests, opt-in loading, and compatibility
 - [Contributing](CONTRIBUTING.md) - environment, tests, PR expectations, and
   adapter rules

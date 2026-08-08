@@ -454,6 +454,7 @@ Build the macOS application bundle on macOS:
 
 - [Documentation index](DOCS_INDEX.md)
 - [Architecture](ARCHITECTURE.md)
+- [Modularization plan](MODULARIZATION_PLAN.md)
 - [Linux support](LINUX.md)
 - [macOS preview](MACOS.md)
 - [Community Hub](COMMUNITY_HUB.md)
