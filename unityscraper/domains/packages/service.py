@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
-from backup_manager import (
-    StfsEntry,
-    StfsPackage,
-    XbePackage,
-    XexPackage,
+from .inspectors import (
     extract_stfs_files,
     inspect_stfs,
     inspect_xbe,
     inspect_xex,
     list_stfs_entries,
+)
+from .models import (
+    StfsEntry,
+    StfsPackage,
+    XbePackage,
+    XexPackage,
 )
 
 __all__ = [
@@ -25,4 +27,3 @@ __all__ = [
     "inspect_xex",
     "list_stfs_entries",
 ]
-

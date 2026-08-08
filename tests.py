@@ -69,8 +69,14 @@ from app_version import DISPLAY_VERSION
 from app_paths import resolve_storage_paths
 from platform_support import desktop_font_family, path_opener_command
 from profile_manager import ProfileSaveManager, find_content_root, mask_identifier
+from unityscraper.app.cli import CliCommand, CliCommandRegistry, build_cli_registry
+from unityscraper.app.cli.legacy import run_legacy_cli
+from unityscraper.core import APP_METADATA
 from unityscraper.core.db import MigrationRegistry
 from unityscraper.core.jobs import JobProgress, JobResult
+from unityscraper.core.paths import app_root as package_app_root
+from unityscraper.core.paths import resource_path as package_resource_path
+from unityscraper.core.version import DISPLAY_VERSION as PACKAGE_DISPLAY_VERSION
 from unityscraper.domains.backups.service import BackupService as ModularBackupService
 from unityscraper.domains.library.service import LibraryService as ModularLibraryService
 
@@ -198,6 +204,39 @@ class TestModularFoundation(unittest.TestCase):
     def test_domain_service_exports_preserve_existing_implementations(self):
         self.assertIs(ModularBackupService, BackupService)
         self.assertIs(ModularLibraryService, LibraryService)
+
+    def test_core_paths_match_legacy_asset_resolution(self):
+        self.assertEqual(package_app_root(), Path.cwd())
+        self.assertTrue(package_resource_path("JSON.txt").is_file())
+
+    def test_core_metadata_matches_legacy_version(self):
+        self.assertEqual(PACKAGE_DISPLAY_VERSION, DISPLAY_VERSION)
+        self.assertEqual(APP_METADATA.name, "UnityScraper")
+        self.assertEqual(APP_METADATA.display_version, DISPLAY_VERSION)
+
+    def test_cli_registry_exposes_legacy_adapter(self):
+        registry = build_cli_registry()
+        command = registry.get("legacy")
+
+        self.assertIn("legacy", registry.as_dict())
+        self.assertEqual(command.description, "Run the existing full UnityScraper CLI surface.")
+
+    def test_cli_registry_rejects_duplicate_command_names(self):
+        registry = CliCommandRegistry()
+        command = CliCommand(name="example", description="Example", handler=lambda argv: 0)
+        registry.register(command)
+
+        with self.assertRaises(ValueError):
+            registry.register(command)
+
+    def test_legacy_cli_adapter_restores_sys_argv(self):
+        original = sys.argv[:]
+        with patch("main.main", return_value=None) as legacy:
+            result = run_legacy_cli(["--help"])
+
+        self.assertEqual(result, 0)
+        self.assertEqual(sys.argv, original)
+        self.assertEqual(legacy.call_count, 1)
 
     def test_job_progress_percent_is_bounded(self):
         self.assertEqual(

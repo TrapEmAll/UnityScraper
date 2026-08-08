@@ -74,6 +74,21 @@ domain/
 5. Move command handlers after services are UI-neutral.
 6. Split large UI pages only after their services are stable.
 
+## Current Progress
+
+- `unityscraper.core.paths` owns application storage and resource resolution;
+  `app_paths.py` is a compatibility wrapper.
+- `unityscraper.core.version` owns version constants; `app_version.py` is a
+  compatibility wrapper.
+- `unityscraper.core.metadata` exposes app name, slug, and version metadata for
+  UI, CLI, API, diagnostics, and packaging.
+- `unityscraper.app.cli` has a command registry and lazy legacy CLI adapter so
+  package command discovery does not import the full scraper runtime.
+- `unityscraper.domains.packages` exposes read-only package models and
+  inspectors.
+- `unityscraper.domains.backups` exposes backup models and operations.
+- `unityscraper.domains.profiles` exposes profile/save models and helpers.
+
 ## Feature Ownership
 
 | Domain | Owns |
@@ -93,4 +108,3 @@ domain/
 New Xbox 360 capabilities should enter as domain use cases first. Desktop
 buttons, REST routes, and CLI flags should call those use cases rather than
 owning file, database, FTP, or package logic themselves.
-

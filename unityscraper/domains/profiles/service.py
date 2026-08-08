@@ -3,17 +3,14 @@
 from __future__ import annotations
 
 from profile_manager import (
-    ProfileInfo,
     ProfileSaveConflict,
     ProfileSaveError,
     ProfileSaveManager,
     ProfileSaveScanner,
-    ProfileScanResult,
-    RestoreResult,
-    SaveInfo,
-    find_content_root,
-    mask_identifier,
 )
+
+from .models import ProfileInfo, ProfileScanResult, RestoreResult, SaveInfo
+from .operations import find_content_root, mask_identifier
 
 __all__ = [
     "ProfileInfo",
@@ -27,4 +24,3 @@ __all__ = [
     "find_content_root",
     "mask_identifier",
 ]
-
