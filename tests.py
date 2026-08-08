@@ -204,6 +204,11 @@ class TestPlatformSupport(unittest.TestCase):
             "io.github.trapemall.UnityScraper",
         )
 
+    def test_pyinstaller_collects_package_modules(self):
+        spec = Path("UnityScraper.spec").read_text(encoding="utf-8")
+
+        self.assertIn("collect_submodules('unityscraper')", spec)
+
 
 class TestModularFoundation(unittest.TestCase):
     """Test package-level adapters that support the modular architecture."""
