@@ -86,6 +86,8 @@ domain/
   package command discovery does not import the full scraper runtime.
 - `unityscraper.domains.packages` exposes read-only package models and
   inspectors.
+- `unityscraper.domains.packages.commands` exposes the first UI-neutral
+  package use cases for STFS inspection and file-table inventory.
 - `unityscraper.domains.backups` exposes backup models and operations.
 - `unityscraper.domains.backups.migrations` owns the backup schema function;
   `backup_service.ensure_backup_schema` remains import-compatible.

@@ -80,6 +80,7 @@ from unityscraper.core.version import DISPLAY_VERSION as PACKAGE_DISPLAY_VERSION
 from unityscraper.domains.backups.service import BackupService as ModularBackupService
 from unityscraper.domains.backups.migrations import ensure_backup_schema as DomainBackupSchema
 from unityscraper.domains.library.service import LibraryService as ModularLibraryService
+from unityscraper.domains.packages.commands import InspectStfsPackage, InventoryStfsFileTable
 
 
 class TestPlatformSupport(unittest.TestCase):
@@ -210,6 +211,40 @@ class TestModularFoundation(unittest.TestCase):
         from backup_service import ensure_backup_schema as LegacyBackupSchema
 
         self.assertIs(LegacyBackupSchema, DomainBackupSchema)
+
+    def test_package_inspection_command_returns_job_result(self):
+        root = Path(tempfile.mkdtemp())
+        try:
+            package = root / "save.bin"
+            header = bytearray(0x1791)
+            header[:4] = b"CON "
+            header[0x344:0x348] = (1).to_bytes(4, "big")
+            header[0x354:0x358] = bytes.fromhex("12345678")
+            header[0x360:0x364] = bytes.fromhex("53510804")
+            title = "Hitman: Absolution".encode("utf-16-be")
+            header[0x411:0x411 + len(title)] = title
+            package.write_bytes(header)
+
+            result = InspectStfsPackage().run(package)
+
+            self.assertEqual(result.status, "completed")
+            self.assertEqual(result.payload["package"]["title_id"], "53510804")
+            self.assertEqual(result.payload["package"]["display_name"], "Hitman: Absolution")
+        finally:
+            shutil.rmtree(root)
+
+    def test_package_inventory_command_returns_failed_job_result(self):
+        root = Path(tempfile.mkdtemp())
+        try:
+            package = root / "invalid.bin"
+            package.write_bytes(b"not a package")
+
+            result = InventoryStfsFileTable().run(package)
+
+            self.assertEqual(result.status, "failed")
+            self.assertEqual(result.payload["source"], str(package))
+        finally:
+            shutil.rmtree(root)
 
     def test_core_paths_match_legacy_asset_resolution(self):
         self.assertEqual(package_app_root(), Path.cwd())

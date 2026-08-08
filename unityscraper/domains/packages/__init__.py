@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .commands import InspectStfsPackage, InventoryStfsFileTable
 from .inspectors import (
     extract_stfs_files,
     inspect_stfs,
@@ -16,6 +17,8 @@ __all__ = [
     "StfsPackage",
     "XbePackage",
     "XexPackage",
+    "InspectStfsPackage",
+    "InventoryStfsFileTable",
     "extract_stfs_files",
     "inspect_stfs",
     "inspect_xbe",
