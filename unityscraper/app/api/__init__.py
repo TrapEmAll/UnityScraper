@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from .entrypoint import create_api
 
-__all__ = ["UnityScraperAPI", "create_api"]
+__all__ = ["create_api"]
 
 
 def __getattr__(name: str):
