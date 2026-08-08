@@ -1,4 +1,5 @@
-"""Single source of truth for UnityScraper version information."""
+"""Compatibility wrapper for package-owned version information."""
 
-APP_VERSION = "1.2.0b1"
-DISPLAY_VERSION = "1.2.0-beta.1"
+from __future__ import annotations
+
+from unityscraper.core.version import *  # noqa: F403

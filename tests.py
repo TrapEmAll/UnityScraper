@@ -35,7 +35,7 @@ from external_tools import (
     split_arguments,
 )
 from external_tools_gui import bundled_xextool_path
-from tool_catalog import ToolCatalog, operation_for
+from tool_catalog import ToolCatalog, ToolDefinition, operation_for
 from knowledge_service import KnowledgeService
 from knowledge_sources import (
     CachedHttpClient,
@@ -44,7 +44,7 @@ from knowledge_sources import (
     SourceInfo,
 )
 from offline_knowledge import OfflineKnowledgeArchive
-from library_service import LibraryService
+from library_service import GameSummary, LibraryService
 from modern_gui import LE_FLUFFIE_CREATOR, XEXTOOL_CREATOR, navigation_shortcut
 from title_catalog import XboxUnityTitleCatalog
 from wiki_adapters import extract_article_text, parse_sitemap
@@ -69,10 +69,23 @@ from app_version import DISPLAY_VERSION
 from app_paths import resolve_storage_paths
 from platform_support import desktop_font_family, path_opener_command
 from profile_manager import ProfileSaveManager, find_content_root, mask_identifier
+from unityscraper.app.api.entrypoint import create_api
+from unityscraper.app.cli import CliCommand, CliCommandRegistry, build_cli_registry
+from unityscraper.app.cli.legacy import run_legacy_cli
+from unityscraper.app.desktop.entrypoint import main as package_desktop_main
+from unityscraper.core import APP_METADATA
 from unityscraper.core.db import MigrationRegistry
-from unityscraper.core.jobs import JobProgress, JobResult
+from unityscraper.core.jobs import CancellationToken, JobProgress, JobResult, JobRunner
+from unityscraper.core.paths import app_root as package_app_root
+from unityscraper.core.paths import resource_path as package_resource_path
+from unityscraper.core.version import DISPLAY_VERSION as PACKAGE_DISPLAY_VERSION
 from unityscraper.domains.backups.service import BackupService as ModularBackupService
+from unityscraper.domains.backups.migrations import ensure_backup_schema as DomainBackupSchema
+from unityscraper.domains.knowledge.models import EntityRecord as ModularEntityRecord
+from unityscraper.domains.library.models import GameSummary as ModularGameSummary
 from unityscraper.domains.library.service import LibraryService as ModularLibraryService
+from unityscraper.domains.packages.commands import InspectStfsPackage, InventoryStfsFileTable
+from unityscraper.domains.tools.models import ToolDefinition as ModularToolDefinition
 
 
 class TestPlatformSupport(unittest.TestCase):
@@ -191,6 +204,11 @@ class TestPlatformSupport(unittest.TestCase):
             "io.github.trapemall.UnityScraper",
         )
 
+    def test_pyinstaller_collects_package_modules(self):
+        spec = Path("UnityScraper.spec").read_text(encoding="utf-8")
+
+        self.assertIn("collect_submodules('unityscraper')", spec)
+
 
 class TestModularFoundation(unittest.TestCase):
     """Test package-level adapters that support the modular architecture."""
@@ -198,6 +216,90 @@ class TestModularFoundation(unittest.TestCase):
     def test_domain_service_exports_preserve_existing_implementations(self):
         self.assertIs(ModularBackupService, BackupService)
         self.assertIs(ModularLibraryService, LibraryService)
+        self.assertIs(ModularGameSummary, GameSummary)
+        self.assertIs(ModularEntityRecord, EntityRecord)
+        self.assertIs(ModularToolDefinition, ToolDefinition)
+
+    def test_backup_schema_is_domain_owned_with_legacy_compatibility(self):
+        from backup_service import ensure_backup_schema as LegacyBackupSchema
+
+        self.assertIs(LegacyBackupSchema, DomainBackupSchema)
+
+    def test_package_inspection_command_returns_job_result(self):
+        root = Path(tempfile.mkdtemp())
+        try:
+            package = root / "save.bin"
+            header = bytearray(0x1791)
+            header[:4] = b"CON "
+            header[0x344:0x348] = (1).to_bytes(4, "big")
+            header[0x354:0x358] = bytes.fromhex("12345678")
+            header[0x360:0x364] = bytes.fromhex("53510804")
+            title = "Hitman: Absolution".encode("utf-16-be")
+            header[0x411:0x411 + len(title)] = title
+            package.write_bytes(header)
+
+            result = InspectStfsPackage().run(package)
+
+            self.assertEqual(result.status, "completed")
+            self.assertEqual(result.payload["package"]["title_id"], "53510804")
+            self.assertEqual(result.payload["package"]["display_name"], "Hitman: Absolution")
+        finally:
+            shutil.rmtree(root)
+
+    def test_package_inventory_command_returns_failed_job_result(self):
+        root = Path(tempfile.mkdtemp())
+        try:
+            package = root / "invalid.bin"
+            package.write_bytes(b"not a package")
+
+            result = InventoryStfsFileTable().run(package)
+
+            self.assertEqual(result.status, "failed")
+            self.assertEqual(result.payload["source"], str(package))
+        finally:
+            shutil.rmtree(root)
+
+    def test_core_paths_match_legacy_asset_resolution(self):
+        self.assertEqual(package_app_root(), Path.cwd())
+        self.assertTrue(package_resource_path("JSON.txt").is_file())
+
+    def test_core_metadata_matches_legacy_version(self):
+        self.assertEqual(PACKAGE_DISPLAY_VERSION, DISPLAY_VERSION)
+        self.assertEqual(APP_METADATA.name, "UnityScraper")
+        self.assertEqual(APP_METADATA.display_version, DISPLAY_VERSION)
+
+    def test_cli_registry_exposes_legacy_adapter(self):
+        registry = build_cli_registry()
+        command = registry.get("legacy")
+
+        self.assertIn("legacy", registry.as_dict())
+        self.assertEqual(command.description, "Run the existing full UnityScraper CLI surface.")
+
+    def test_cli_registry_rejects_duplicate_command_names(self):
+        registry = CliCommandRegistry()
+        command = CliCommand(name="example", description="Example", handler=lambda argv: 0)
+        registry.register(command)
+
+        with self.assertRaises(ValueError):
+            registry.register(command)
+
+    def test_legacy_cli_adapter_restores_sys_argv(self):
+        original = sys.argv[:]
+        with patch("main.main", return_value=None) as legacy:
+            result = run_legacy_cli(["--help"])
+
+        self.assertEqual(result, 0)
+        self.assertEqual(sys.argv, original)
+        self.assertEqual(legacy.call_count, 1)
+
+    def test_app_surface_entrypoints_delegate_lazily(self):
+        with patch("desktop_app.main", return_value=0) as desktop:
+            self.assertEqual(package_desktop_main(), 0)
+        with patch("api.UnityScraperAPI", return_value="api") as api_class:
+            self.assertEqual(create_api(), "api")
+
+        self.assertEqual(desktop.call_count, 1)
+        self.assertEqual(api_class.call_count, 1)
 
     def test_job_progress_percent_is_bounded(self):
         self.assertEqual(
@@ -213,6 +315,7 @@ class TestModularFoundation(unittest.TestCase):
     def test_job_result_factories_set_terminal_state(self):
         completed = JobResult.completed("done", count=2)
         failed = JobResult.failed("failed", reason="example")
+        cancelled = JobResult.cancelled()
 
         self.assertEqual(completed.status, "completed")
         self.assertEqual(completed.payload["count"], 2)
@@ -220,6 +323,42 @@ class TestModularFoundation(unittest.TestCase):
         self.assertEqual(failed.status, "failed")
         self.assertEqual(failed.payload["reason"], "example")
         self.assertIsNotNone(failed.finished_at)
+        self.assertEqual(cancelled.status, "cancelled")
+        self.assertIsNotNone(cancelled.finished_at)
+
+    def test_job_runner_normalizes_success_failure_and_progress(self):
+        progress = []
+        runner = JobRunner(progress_callback=progress.append)
+
+        success = runner.run(
+            "example",
+            lambda context: JobResult.completed("done", name=context.name),
+        )
+
+        failure = runner.run(
+            "failing",
+            lambda context: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+
+        self.assertEqual(success.status, "completed")
+        self.assertEqual(success.payload["name"], "example")
+        self.assertEqual(failure.status, "failed")
+        self.assertEqual(failure.payload["job"], "failing")
+        self.assertGreaterEqual(len(progress), 4)
+        self.assertEqual(progress[0].message, "example started")
+
+    def test_job_runner_honors_pre_cancelled_token(self):
+        token = CancellationToken()
+        token.cancel()
+
+        result = JobRunner().run(
+            "cancelled",
+            lambda context: JobResult.completed("should not run"),
+            token=token,
+        )
+
+        self.assertEqual(result.status, "cancelled")
+        self.assertEqual(result.payload["job"], "cancelled")
 
     def test_domain_migration_registry_applies_once(self):
         calls = []

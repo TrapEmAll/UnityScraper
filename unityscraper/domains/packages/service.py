@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
-from backup_manager import (
-    StfsEntry,
-    StfsPackage,
-    XbePackage,
-    XexPackage,
+from .commands import InspectStfsPackage, InventoryStfsFileTable
+from .inspectors import (
     extract_stfs_files,
     inspect_stfs,
     inspect_xbe,
     inspect_xex,
     list_stfs_entries,
+)
+from .models import (
+    StfsEntry,
+    StfsPackage,
+    XbePackage,
+    XexPackage,
 )
 
 __all__ = [
@@ -19,10 +22,11 @@ __all__ = [
     "StfsPackage",
     "XbePackage",
     "XexPackage",
+    "InspectStfsPackage",
+    "InventoryStfsFileTable",
     "extract_stfs_files",
     "inspect_stfs",
     "inspect_xbe",
     "inspect_xex",
     "list_stfs_entries",
 ]
-

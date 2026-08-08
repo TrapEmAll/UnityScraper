@@ -2,22 +2,26 @@
 
 from __future__ import annotations
 
-from backup_manager import (
+from backup_service import BackupRepository, BackupService
+from unityscraper.domains.backups.migrations import ensure_backup_schema
+
+from .models import (
     BackupError,
     BackupItem,
     ConflictError,
-    FtpBackupClient,
     FtpTarget,
     InvalidPackageError,
     ScanResult,
-    StfsPackage,
     TransferResult,
     UnsafeArchiveError,
+)
+from .operations import (
+    FtpBackupClient,
     install_stfs_package,
     scan_local_target,
     verify_backup_item,
 )
-from backup_service import BackupRepository, BackupService, ensure_backup_schema
+from unityscraper.domains.packages.models import StfsPackage
 
 __all__ = [
     "BackupError",
@@ -37,4 +41,3 @@ __all__ = [
     "scan_local_target",
     "verify_backup_item",
 ]
-

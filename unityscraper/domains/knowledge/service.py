@@ -2,8 +2,17 @@
 
 from __future__ import annotations
 
-from knowledge_base import KnowledgeRepository, is_unknown
 from knowledge_service import KnowledgeService
 
-__all__ = ["KnowledgeRepository", "KnowledgeService", "is_unknown"]
+from .models import EntityRecord, Fact, Identifier
+from .repository import KnowledgeRepository, is_unknown, normalize_titleid
 
+__all__ = [
+    "EntityRecord",
+    "Fact",
+    "Identifier",
+    "KnowledgeRepository",
+    "KnowledgeService",
+    "is_unknown",
+    "normalize_titleid",
+]

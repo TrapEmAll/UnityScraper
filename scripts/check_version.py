@@ -14,10 +14,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def read_versions() -> dict[str, str]:
-    app_text = (ROOT / "app_version.py").read_text(encoding="utf-8")
+    app_text = (ROOT / "unityscraper/core/version.py").read_text(encoding="utf-8")
     app_match = re.search(r'^APP_VERSION\s*=\s*"([^"]+)"', app_text, re.MULTILINE)
     if not app_match:
-        raise RuntimeError("APP_VERSION was not found in app_version.py")
+        raise RuntimeError("APP_VERSION was not found in unityscraper/core/version.py")
 
     version_data = json.loads((ROOT / "VERSION").read_text(encoding="utf-8"))
     pyproject_text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
@@ -37,7 +37,7 @@ def read_versions() -> dict[str, str]:
         raise RuntimeError("A release version was not found in Linux AppStream metadata")
 
     return {
-        "app_version.py": app_match.group(1),
+        "unityscraper/core/version.py": app_match.group(1),
         "VERSION": str(version_data["version"]),
         "pyproject.toml": project_match.group(1),
         "Linux AppStream metadata": str(release.get("version")),

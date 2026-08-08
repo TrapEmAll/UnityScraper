@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from desktop_app import main
+
+def main() -> int:
+    """Run the desktop app through the package-owned entry point."""
+    from desktop_app import main as desktop_main
+
+    return desktop_main()
+
 
 __all__ = ["main"]
-

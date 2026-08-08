@@ -3,6 +3,8 @@
 import sys
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_submodules
+
 
 icon = 'assets/UnityScraper.ico' if sys.platform == 'win32' else None
 tk_datas = []
@@ -24,7 +26,7 @@ a = Analysis(
         ('THIRD_PARTY_NOTICES.md', '.'),
         ('assets', 'assets'),
     ] + tk_datas,
-    hiddenimports=[
+    hiddenimports=collect_submodules('unityscraper') + [
         'backup_gui',
         'backup_manager',
         'backup_service',
