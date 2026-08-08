@@ -78,6 +78,7 @@ from unityscraper.core.paths import app_root as package_app_root
 from unityscraper.core.paths import resource_path as package_resource_path
 from unityscraper.core.version import DISPLAY_VERSION as PACKAGE_DISPLAY_VERSION
 from unityscraper.domains.backups.service import BackupService as ModularBackupService
+from unityscraper.domains.backups.migrations import ensure_backup_schema as DomainBackupSchema
 from unityscraper.domains.library.service import LibraryService as ModularLibraryService
 
 
@@ -204,6 +205,11 @@ class TestModularFoundation(unittest.TestCase):
     def test_domain_service_exports_preserve_existing_implementations(self):
         self.assertIs(ModularBackupService, BackupService)
         self.assertIs(ModularLibraryService, LibraryService)
+
+    def test_backup_schema_is_domain_owned_with_legacy_compatibility(self):
+        from backup_service import ensure_backup_schema as LegacyBackupSchema
+
+        self.assertIs(LegacyBackupSchema, DomainBackupSchema)
 
     def test_core_paths_match_legacy_asset_resolution(self):
         self.assertEqual(package_app_root(), Path.cwd())

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from backup_service import BackupRepository, BackupService, ensure_backup_schema
+from backup_service import BackupRepository, BackupService
+from unityscraper.domains.backups.migrations import ensure_backup_schema
 
 from .models import (
     BackupError,

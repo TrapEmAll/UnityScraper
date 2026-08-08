@@ -87,6 +87,8 @@ domain/
 - `unityscraper.domains.packages` exposes read-only package models and
   inspectors.
 - `unityscraper.domains.backups` exposes backup models and operations.
+- `unityscraper.domains.backups.migrations` owns the backup schema function;
+  `backup_service.ensure_backup_schema` remains import-compatible.
 - `unityscraper.domains.profiles` exposes profile/save models and helpers.
 
 ## Feature Ownership
