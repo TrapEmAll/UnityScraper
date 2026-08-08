@@ -87,6 +87,8 @@ domain/
   CLI, and API workflow reuse.
 - `unityscraper.app.cli` has a command registry and lazy legacy CLI adapter so
   package command discovery does not import the full scraper runtime.
+- `unityscraper.app.api` and `unityscraper.app.desktop` keep package imports
+  light by importing their legacy runtime only when their surface starts.
 - `unityscraper.domains.packages` exposes read-only package models and
   inspectors.
 - `unityscraper.domains.packages.commands` exposes the first UI-neutral

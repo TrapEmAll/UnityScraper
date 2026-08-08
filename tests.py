@@ -69,8 +69,10 @@ from app_version import DISPLAY_VERSION
 from app_paths import resolve_storage_paths
 from platform_support import desktop_font_family, path_opener_command
 from profile_manager import ProfileSaveManager, find_content_root, mask_identifier
+from unityscraper.app.api.entrypoint import create_api
 from unityscraper.app.cli import CliCommand, CliCommandRegistry, build_cli_registry
 from unityscraper.app.cli.legacy import run_legacy_cli
+from unityscraper.app.desktop.entrypoint import main as package_desktop_main
 from unityscraper.core import APP_METADATA
 from unityscraper.core.db import MigrationRegistry
 from unityscraper.core.jobs import CancellationToken, JobProgress, JobResult, JobRunner
@@ -278,6 +280,15 @@ class TestModularFoundation(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(sys.argv, original)
         self.assertEqual(legacy.call_count, 1)
+
+    def test_app_surface_entrypoints_delegate_lazily(self):
+        with patch("desktop_app.main", return_value=0) as desktop:
+            self.assertEqual(package_desktop_main(), 0)
+        with patch("api.UnityScraperAPI", return_value="api") as api_class:
+            self.assertEqual(create_api(), "api")
+
+        self.assertEqual(desktop.call_count, 1)
+        self.assertEqual(api_class.call_count, 1)
 
     def test_job_progress_percent_is_bounded(self):
         self.assertEqual(
