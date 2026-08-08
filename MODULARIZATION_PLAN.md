@@ -82,6 +82,9 @@ domain/
   compatibility wrapper.
 - `unityscraper.core.metadata` exposes app name, slug, and version metadata for
   UI, CLI, API, diagnostics, and packaging.
+- `unityscraper.core.jobs` exposes shared job results, progress events,
+  cancellation tokens, contexts, and a synchronous runner for future desktop,
+  CLI, and API workflow reuse.
 - `unityscraper.app.cli` has a command registry and lazy legacy CLI adapter so
   package command discovery does not import the full scraper runtime.
 - `unityscraper.domains.packages` exposes read-only package models and

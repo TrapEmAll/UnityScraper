@@ -73,7 +73,7 @@ from unityscraper.app.cli import CliCommand, CliCommandRegistry, build_cli_regis
 from unityscraper.app.cli.legacy import run_legacy_cli
 from unityscraper.core import APP_METADATA
 from unityscraper.core.db import MigrationRegistry
-from unityscraper.core.jobs import JobProgress, JobResult
+from unityscraper.core.jobs import CancellationToken, JobProgress, JobResult, JobRunner
 from unityscraper.core.paths import app_root as package_app_root
 from unityscraper.core.paths import resource_path as package_resource_path
 from unityscraper.core.version import DISPLAY_VERSION as PACKAGE_DISPLAY_VERSION
@@ -293,6 +293,7 @@ class TestModularFoundation(unittest.TestCase):
     def test_job_result_factories_set_terminal_state(self):
         completed = JobResult.completed("done", count=2)
         failed = JobResult.failed("failed", reason="example")
+        cancelled = JobResult.cancelled()
 
         self.assertEqual(completed.status, "completed")
         self.assertEqual(completed.payload["count"], 2)
@@ -300,6 +301,42 @@ class TestModularFoundation(unittest.TestCase):
         self.assertEqual(failed.status, "failed")
         self.assertEqual(failed.payload["reason"], "example")
         self.assertIsNotNone(failed.finished_at)
+        self.assertEqual(cancelled.status, "cancelled")
+        self.assertIsNotNone(cancelled.finished_at)
+
+    def test_job_runner_normalizes_success_failure_and_progress(self):
+        progress = []
+        runner = JobRunner(progress_callback=progress.append)
+
+        success = runner.run(
+            "example",
+            lambda context: JobResult.completed("done", name=context.name),
+        )
+
+        failure = runner.run(
+            "failing",
+            lambda context: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+
+        self.assertEqual(success.status, "completed")
+        self.assertEqual(success.payload["name"], "example")
+        self.assertEqual(failure.status, "failed")
+        self.assertEqual(failure.payload["job"], "failing")
+        self.assertGreaterEqual(len(progress), 4)
+        self.assertEqual(progress[0].message, "example started")
+
+    def test_job_runner_honors_pre_cancelled_token(self):
+        token = CancellationToken()
+        token.cancel()
+
+        result = JobRunner().run(
+            "cancelled",
+            lambda context: JobResult.completed("should not run"),
+            token=token,
+        )
+
+        self.assertEqual(result.status, "cancelled")
+        self.assertEqual(result.payload["job"], "cancelled")
 
     def test_domain_migration_registry_applies_once(self):
         calls = []
