@@ -35,7 +35,7 @@ from external_tools import (
     split_arguments,
 )
 from external_tools_gui import bundled_xextool_path
-from tool_catalog import ToolCatalog, operation_for
+from tool_catalog import ToolCatalog, ToolDefinition, operation_for
 from knowledge_service import KnowledgeService
 from knowledge_sources import (
     CachedHttpClient,
@@ -44,7 +44,7 @@ from knowledge_sources import (
     SourceInfo,
 )
 from offline_knowledge import OfflineKnowledgeArchive
-from library_service import LibraryService
+from library_service import GameSummary, LibraryService
 from modern_gui import LE_FLUFFIE_CREATOR, XEXTOOL_CREATOR, navigation_shortcut
 from title_catalog import XboxUnityTitleCatalog
 from wiki_adapters import extract_article_text, parse_sitemap
@@ -81,8 +81,11 @@ from unityscraper.core.paths import resource_path as package_resource_path
 from unityscraper.core.version import DISPLAY_VERSION as PACKAGE_DISPLAY_VERSION
 from unityscraper.domains.backups.service import BackupService as ModularBackupService
 from unityscraper.domains.backups.migrations import ensure_backup_schema as DomainBackupSchema
+from unityscraper.domains.knowledge.models import EntityRecord as ModularEntityRecord
+from unityscraper.domains.library.models import GameSummary as ModularGameSummary
 from unityscraper.domains.library.service import LibraryService as ModularLibraryService
 from unityscraper.domains.packages.commands import InspectStfsPackage, InventoryStfsFileTable
+from unityscraper.domains.tools.models import ToolDefinition as ModularToolDefinition
 
 
 class TestPlatformSupport(unittest.TestCase):
@@ -208,6 +211,9 @@ class TestModularFoundation(unittest.TestCase):
     def test_domain_service_exports_preserve_existing_implementations(self):
         self.assertIs(ModularBackupService, BackupService)
         self.assertIs(ModularLibraryService, LibraryService)
+        self.assertIs(ModularGameSummary, GameSummary)
+        self.assertIs(ModularEntityRecord, EntityRecord)
+        self.assertIs(ModularToolDefinition, ToolDefinition)
 
     def test_backup_schema_is_domain_owned_with_legacy_compatibility(self):
         from backup_service import ensure_backup_schema as LegacyBackupSchema

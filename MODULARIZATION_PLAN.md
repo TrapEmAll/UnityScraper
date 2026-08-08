@@ -97,6 +97,9 @@ domain/
 - `unityscraper.domains.backups.migrations` owns the backup schema function;
   `backup_service.ensure_backup_schema` remains import-compatible.
 - `unityscraper.domains.profiles` exposes profile/save models and helpers.
+- `unityscraper.domains.knowledge`, `unityscraper.domains.library`, and
+  `unityscraper.domains.tools` expose first-class model, repository, catalog,
+  and runner modules around their existing implementations.
 
 ## Feature Ownership
 
