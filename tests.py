@@ -45,7 +45,12 @@ from knowledge_sources import (
 )
 from offline_knowledge import OfflineKnowledgeArchive
 from library_service import GameSummary, LibraryService
-from modern_gui import LE_FLUFFIE_CREATOR, XEXTOOL_CREATOR, navigation_shortcut
+from modern_gui import (
+    LE_FLUFFIE_CREATOR,
+    XEXTOOL_CREATOR,
+    UnityScraperDesktop,
+    navigation_shortcut,
+)
 from title_catalog import XboxUnityTitleCatalog
 from wiki_adapters import extract_article_text, parse_sitemap
 from backup_manager import (
@@ -1028,6 +1033,24 @@ class TestExternalTools(unittest.TestCase):
         self.assertEqual(navigation_shortcut(9), "9")
         self.assertEqual(navigation_shortcut(10), "0")
         self.assertIsNone(navigation_shortcut(11))
+
+    @patch("modern_gui.tk.Menu")
+    @patch("modern_gui.tk.Menubutton")
+    @patch("modern_gui.ttk.Frame")
+    def test_toolbar_dropdowns_belong_to_their_buttons(self, frame, menubutton, menu):
+        app = UnityScraperDesktop.__new__(UnityScraperDesktop)
+        app.root = MagicMock()
+        buttons = [MagicMock() for _ in range(4)]
+        submenus = [MagicMock() for _ in range(4)]
+        menubutton.side_effect = buttons
+        menu.side_effect = submenus
+
+        app._build_menubar()
+
+        self.assertEqual(frame.call_args.args[0], app.root)
+        self.assertEqual([call.args[0] for call in menu.call_args_list], buttons)
+        for button, submenu in zip(buttons, submenus):
+            button.configure.assert_called_once_with(menu=submenu)
 
     def test_bundled_xextool_has_documented_binary(self):
         binary = (
