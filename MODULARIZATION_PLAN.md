@@ -97,9 +97,14 @@ domain/
 - `unityscraper.domains.backups.migrations` owns the backup schema function;
   `backup_service.ensure_backup_schema` remains import-compatible.
 - `unityscraper.domains.profiles` exposes profile/save models and helpers.
-- `unityscraper.domains.knowledge`, `unityscraper.domains.library`, and
-  `unityscraper.domains.tools` expose first-class model, repository, catalog,
-  and runner modules around their existing implementations.
+- `unityscraper.domains.knowledge` exposes first-class model and repository
+  adapters around its existing implementations.
+- `unityscraper.domains.library` owns the read-only library model and query
+  service. Its XboxUnity title catalog remains behind a package adapter until
+  the catalog migration and knowledge dependencies move into package modules.
+- `unityscraper.domains.tools` owns its data models, catalog, executable
+  discovery, command construction, and process runner. `tool_catalog.py` and
+  `external_tools.py` remain compatibility wrappers.
 
 ## Feature Ownership
 
