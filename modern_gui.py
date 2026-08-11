@@ -48,7 +48,7 @@ from knowledge_service import KnowledgeService
 from knowledge_scheduler import KnowledgeScheduler
 from knowledge_gui import KnowledgePage
 from i18n import SUPPORTED_LANGUAGES, init_translator, t
-from library_service import GameSummary, LibraryService
+from unityscraper.domains.library import GameSummary, LibraryService
 from platform_support import open_path
 from profile_gui import ProfileSavePage
 from profile_manager import ProfileSaveManager

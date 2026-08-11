@@ -12,15 +12,17 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Any, Callable
 
 from app_paths import resource_path
-from external_tools import (
+from unityscraper.domains.tools import (
     ExternalToolError,
     ExternalToolRunner,
+    ToolCatalog,
+    ToolDefinition,
     ToolLaunch,
+    ToolOperation,
     ToolResult,
     format_command,
     split_arguments,
 )
-from tool_catalog import ToolCatalog, ToolDefinition, ToolOperation
 from ui_theme import PALETTE
 
 

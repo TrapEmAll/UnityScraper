@@ -1141,8 +1141,12 @@ def main():
     # Initialize scraper
     if args.list_tools or args.tool_id:
         try:
-            from external_tools import ExternalToolRunner, format_command
-            from tool_catalog import ToolCatalog, operation_for
+            from unityscraper.domains.tools import (
+                ExternalToolRunner,
+                ToolCatalog,
+                format_command,
+                operation_for,
+            )
 
             catalog = ToolCatalog(CONFIG_PATH)
             if args.list_tools:

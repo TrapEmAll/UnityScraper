@@ -85,7 +85,9 @@ from unityscraper.domains.knowledge.models import EntityRecord as ModularEntityR
 from unityscraper.domains.library.models import GameSummary as ModularGameSummary
 from unityscraper.domains.library.service import LibraryService as ModularLibraryService
 from unityscraper.domains.packages.commands import InspectStfsPackage, InventoryStfsFileTable
+from unityscraper.domains.tools.catalog import ToolCatalog as ModularToolCatalog
 from unityscraper.domains.tools.models import ToolDefinition as ModularToolDefinition
+from unityscraper.domains.tools.runner import ExternalToolRunner as ModularToolRunner
 
 
 class TestPlatformSupport(unittest.TestCase):
@@ -211,7 +213,7 @@ class TestPlatformSupport(unittest.TestCase):
 
 
 class TestModularFoundation(unittest.TestCase):
-    """Test package-level adapters that support the modular architecture."""
+    """Test package ownership and legacy compatibility boundaries."""
 
     def test_domain_service_exports_preserve_existing_implementations(self):
         self.assertIs(ModularBackupService, BackupService)
@@ -219,6 +221,26 @@ class TestModularFoundation(unittest.TestCase):
         self.assertIs(ModularGameSummary, GameSummary)
         self.assertIs(ModularEntityRecord, EntityRecord)
         self.assertIs(ModularToolDefinition, ToolDefinition)
+        self.assertIs(ModularToolCatalog, ToolCatalog)
+        self.assertIs(ModularToolRunner, ExternalToolRunner)
+
+    def test_migrated_implementations_are_domain_owned(self):
+        self.assertEqual(
+            ModularLibraryService.__module__,
+            "unityscraper.domains.library.service",
+        )
+        self.assertEqual(
+            ModularGameSummary.__module__,
+            "unityscraper.domains.library.models",
+        )
+        self.assertEqual(
+            ModularToolCatalog.__module__,
+            "unityscraper.domains.tools.catalog",
+        )
+        self.assertEqual(
+            ModularToolRunner.__module__,
+            "unityscraper.domains.tools.runner",
+        )
 
     def test_backup_schema_is_domain_owned_with_legacy_compatibility(self):
         from backup_service import ensure_backup_schema as LegacyBackupSchema
@@ -1000,7 +1022,7 @@ class TestExternalTools(unittest.TestCase):
             hashlib.sha256(b"test executable").hexdigest().upper(),
         )
 
-    @patch("external_tools.subprocess.Popen")
+    @patch("unityscraper.domains.tools.runner.subprocess.Popen")
     def test_detached_launch_uses_argument_vector(self, popen):
         popen.return_value.pid = 360
         runner = ExternalToolRunner()
