@@ -17,6 +17,20 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Iterator, Optional
 
+from unityscraper.domains.packages.errors import (
+    InvalidPackageError,
+    PackageError as BackupError,
+    UnsafeArchiveError,
+)
+from unityscraper.domains.packages.executables import (
+    inspect_xbe as _domain_inspect_xbe,
+    inspect_xex as _domain_inspect_xex,
+)
+from unityscraper.domains.packages.stfs import (
+    extract_stfs_files as _domain_extract_stfs_files,
+    inspect_stfs as _domain_inspect_stfs,
+    list_stfs_entries as _domain_list_stfs_entries,
+)
 
 STFS_MAGICS = {b"CON ", b"LIVE", b"PIRS"}
 CONTENT_TYPES = {
@@ -36,18 +50,6 @@ COPY_CHUNK = 1024 * 1024
 MAX_ARCHIVE_FILES = 200_000
 MAX_ARCHIVE_EXPANDED_SIZE = 128 * 1024 * 1024 * 1024
 FATX_INVALID_RE = re.compile(r'[<>:"/\\|?*]')
-
-
-class BackupError(RuntimeError):
-    """Base error for backup operations."""
-
-
-class InvalidPackageError(BackupError):
-    """Raised when a file is not a supported Xbox package."""
-
-
-class UnsafeArchiveError(BackupError):
-    """Raised when an archive attempts to escape its extraction directory."""
 
 
 class ConflictError(BackupError):
@@ -494,6 +496,14 @@ def inspect_xex(path: str | Path) -> XexPackage:
         module_flags=module_flags,
         size=package_path.stat().st_size,
     )
+
+
+# Compatibility exports. Package-format ownership lives in the packages domain.
+inspect_stfs = _domain_inspect_stfs
+list_stfs_entries = _domain_list_stfs_entries
+extract_stfs_files = _domain_extract_stfs_files
+inspect_xbe = _domain_inspect_xbe
+inspect_xex = _domain_inspect_xex
 
 
 def sha256_file(path: str | Path) -> str:

@@ -90,6 +90,7 @@ from unityscraper.domains.knowledge.models import EntityRecord as ModularEntityR
 from unityscraper.domains.library.models import GameSummary as ModularGameSummary
 from unityscraper.domains.library.service import LibraryService as ModularLibraryService
 from unityscraper.domains.packages.commands import InspectStfsPackage, InventoryStfsFileTable
+from unityscraper.domains.packages.stfs import verify_stfs
 from unityscraper.domains.tools.catalog import ToolCatalog as ModularToolCatalog
 from unityscraper.domains.tools.models import ToolDefinition as ModularToolDefinition
 from unityscraper.domains.tools.runner import ExternalToolRunner as ModularToolRunner
@@ -1603,7 +1604,8 @@ class TestBackupManager(unittest.TestCase):
         payload[0x360:0x364] = bytes.fromhex("53510804")
         payload[0x379] = 0x24
         payload[0x37B] = 1
-        payload[0x37C:0x37E] = (1).to_bytes(2, "big")
+        payload[0x37C:0x37E] = (1).to_bytes(2, "little")
+        payload[0x395:0x399] = (2).to_bytes(4, "big")
         name = b"savegame.dat"
         entry = 0xB000
         payload[entry:entry + len(name)] = name
@@ -1620,7 +1622,6 @@ class TestBackupManager(unittest.TestCase):
         self.assertEqual(entries[0].size, 123)
         self.assertTrue(entries[0].consecutive)
 
-        payload[0x379 + 0x1C:0x379 + 0x20] = (2).to_bytes(4, "big")
         payload[0xC000:0xC004] = b"data"
         package_path.write_bytes(payload)
         destination = self.temp_dir / "extracted"
@@ -1628,6 +1629,57 @@ class TestBackupManager(unittest.TestCase):
         self.assertEqual((destination / "savegame.dat").read_bytes()[:4], b"data")
         self.assertEqual(result["extracted"][0]["size"], 123)
         self.assertTrue(Path(result["manifest"]).is_file())
+
+    def test_fragmented_stfs_extraction_and_integrity_verification(self):
+        payload = bytearray(0xF000)
+        payload[:4] = b"LIVE"
+        payload[0x340:0x344] = (0xA000).to_bytes(4, "big")
+        payload[0x344:0x348] = (1).to_bytes(4, "big")
+        payload[0x360:0x364] = bytes.fromhex("53510804")
+        payload[0x379] = 0x24
+        payload[0x37B] = 1
+        payload[0x37C:0x37E] = (1).to_bytes(2, "little")
+        payload[0x395:0x399] = (4).to_bytes(4, "big")
+
+        name = b"fragmented.bin"
+        entry = 0xB000
+        payload[entry:entry + len(name)] = name
+        payload[entry + 0x28] = len(name)
+        payload[entry + 0x29:entry + 0x2C] = (2).to_bytes(3, "little")
+        payload[entry + 0x2F:entry + 0x32] = (1).to_bytes(3, "little")
+        payload[entry + 0x32:entry + 0x34] = (0xFFFF).to_bytes(2, "big")
+        payload[entry + 0x34:entry + 0x38] = (0x1004).to_bytes(4, "big")
+        payload[0xC000:0xD000] = b"A" * 0x1000
+        payload[0xE000:0xE004] = b"tail"
+
+        for block, offset in enumerate((0xB000, 0xC000, 0xD000, 0xE000)):
+            record = 0xA000 + block * 0x18
+            payload[record:record + 0x14] = hashlib.sha1(
+                payload[offset:offset + 0x1000]
+            ).digest()
+            next_block = 3 if block == 1 else 0xFFFFFF
+            payload[record + 0x14:record + 0x18] = (
+                (2 << 30) | next_block
+            ).to_bytes(4, "big")
+
+        package_path = self.temp_dir / "fragmented.stfs"
+        package_path.write_bytes(payload)
+        entries = list_stfs_entries(package_path)
+        self.assertEqual(entries[0].blocks, (1, 3))
+
+        destination = self.temp_dir / "fragmented-output"
+        extract_stfs_files(package_path, destination)
+        self.assertEqual(
+            (destination / "fragmented.bin").read_bytes(),
+            b"A" * 0x1000 + b"tail",
+        )
+        self.assertTrue(verify_stfs(package_path).valid)
+
+        payload[0xC000] ^= 0xFF
+        package_path.write_bytes(payload)
+        report = verify_stfs(package_path)
+        self.assertFalse(report.valid)
+        self.assertEqual(report.mismatched_blocks, 1)
 
     def test_rejects_unknown_stfs_content_type(self):
         with self.assertRaises(InvalidPackageError):

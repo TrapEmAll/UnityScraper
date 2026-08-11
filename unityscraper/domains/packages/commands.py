@@ -7,7 +7,7 @@ from pathlib import Path
 
 from unityscraper.core.jobs import JobResult
 
-from .inspectors import inspect_stfs, list_stfs_entries
+from .inspectors import inspect_stfs, list_stfs_entries, verify_stfs
 
 
 class InspectStfsPackage:
@@ -51,4 +51,27 @@ class InventoryStfsFileTable:
         )
 
 
-__all__ = ["InspectStfsPackage", "InventoryStfsFileTable"]
+class VerifyStfsPackage:
+    """Check every allocated STFS data block against its stored SHA-1."""
+
+    def run(self, source: str | Path, *, max_issues: int = 10_000) -> JobResult:
+        path = Path(source)
+        try:
+            report = verify_stfs(path, max_issues=max_issues)
+        except Exception as exc:
+            return JobResult.failed(
+                "STFS verification failed",
+                source=str(path),
+                error=str(exc),
+            )
+        details = asdict(report)
+        details["source"] = str(report.source)
+        details["issues"] = [asdict(issue) for issue in report.issues]
+        return JobResult.completed(
+            "STFS verification completed",
+            valid=report.valid,
+            **details,
+        )
+
+
+__all__ = ["InspectStfsPackage", "InventoryStfsFileTable", "VerifyStfsPackage"]
