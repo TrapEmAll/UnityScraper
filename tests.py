@@ -1597,17 +1597,17 @@ class TestBackupManager(unittest.TestCase):
         self.assertEqual(package.save_game_id, "12345678")
 
     def test_stfs_file_table_is_inventoried_read_only(self):
-        payload = bytearray(0xD000)
+        payload = bytearray(0xE000)
         payload[:4] = b"LIVE"
-        payload[0x340:0x344] = (0xA000).to_bytes(4, "big")
+        payload[0x340:0x344] = (0xB000).to_bytes(4, "big")
         payload[0x344:0x348] = (1).to_bytes(4, "big")
         payload[0x360:0x364] = bytes.fromhex("53510804")
         payload[0x379] = 0x24
-        payload[0x37B] = 1
+        payload[0x37B] = 0
         payload[0x37C:0x37E] = (1).to_bytes(2, "little")
         payload[0x395:0x399] = (2).to_bytes(4, "big")
         name = b"savegame.dat"
-        entry = 0xB000
+        entry = 0xC000
         payload[entry:entry + len(name)] = name
         payload[entry + 0x28] = len(name) | 0x40
         payload[entry + 0x29:entry + 0x2C] = (1).to_bytes(3, "little")
@@ -1622,7 +1622,7 @@ class TestBackupManager(unittest.TestCase):
         self.assertEqual(entries[0].size, 123)
         self.assertTrue(entries[0].consecutive)
 
-        payload[0xC000:0xC004] = b"data"
+        payload[0xD000:0xD004] = b"data"
         package_path.write_bytes(payload)
         destination = self.temp_dir / "extracted"
         result = extract_stfs_files(package_path, destination)
@@ -1631,29 +1631,29 @@ class TestBackupManager(unittest.TestCase):
         self.assertTrue(Path(result["manifest"]).is_file())
 
     def test_fragmented_stfs_extraction_and_integrity_verification(self):
-        payload = bytearray(0xF000)
+        payload = bytearray(0x11000)
         payload[:4] = b"LIVE"
-        payload[0x340:0x344] = (0xA000).to_bytes(4, "big")
+        payload[0x340:0x344] = (0xB000).to_bytes(4, "big")
         payload[0x344:0x348] = (1).to_bytes(4, "big")
         payload[0x360:0x364] = bytes.fromhex("53510804")
         payload[0x379] = 0x24
-        payload[0x37B] = 1
+        payload[0x37B] = 0
         payload[0x37C:0x37E] = (1).to_bytes(2, "little")
         payload[0x395:0x399] = (4).to_bytes(4, "big")
 
         name = b"fragmented.bin"
-        entry = 0xB000
+        entry = 0xC000
         payload[entry:entry + len(name)] = name
         payload[entry + 0x28] = len(name)
         payload[entry + 0x29:entry + 0x2C] = (2).to_bytes(3, "little")
         payload[entry + 0x2F:entry + 0x32] = (1).to_bytes(3, "little")
         payload[entry + 0x32:entry + 0x34] = (0xFFFF).to_bytes(2, "big")
         payload[entry + 0x34:entry + 0x38] = (0x1004).to_bytes(4, "big")
-        payload[0xC000:0xD000] = b"A" * 0x1000
-        payload[0xE000:0xE004] = b"tail"
+        payload[0xD000:0xE000] = b"A" * 0x1000
+        payload[0xF000:0xF004] = b"tail"
 
-        for block, offset in enumerate((0xB000, 0xC000, 0xD000, 0xE000)):
-            record = 0xA000 + block * 0x18
+        for block, offset in enumerate((0xC000, 0xD000, 0xE000, 0xF000)):
+            record = 0xB000 + block * 0x18
             payload[record:record + 0x14] = hashlib.sha1(
                 payload[offset:offset + 0x1000]
             ).digest()
@@ -1675,7 +1675,7 @@ class TestBackupManager(unittest.TestCase):
         )
         self.assertTrue(verify_stfs(package_path).valid)
 
-        payload[0xC000] ^= 0xFF
+        payload[0xD000] ^= 0xFF
         package_path.write_bytes(payload)
         report = verify_stfs(package_path)
         self.assertFalse(report.valid)
@@ -2739,16 +2739,16 @@ class TestPackageLabDomains(unittest.TestCase):
             verify_stfs,
         )
 
-        payload = bytearray(0xF000)
+        payload = bytearray(0x11000)
         payload[:4] = b"LIVE"
-        payload[0x340:0x344] = (0xA000).to_bytes(4, "big")
+        payload[0x340:0x344] = (0xB000).to_bytes(4, "big")
         payload[0x344:0x348] = (1).to_bytes(4, "big")
         payload[0x360:0x364] = bytes.fromhex("53510804")
         payload[0x379] = 0x24
-        payload[0x37B] = 1
+        payload[0x37B] = 0
         payload[0x37C:0x37E] = (1).to_bytes(2, "little")
         payload[0x395:0x399] = (4).to_bytes(4, "big")
-        entry = 0xB000
+        entry = 0xC000
         name = b"fragmented.bin"
         payload[entry:entry + len(name)] = name
         payload[entry + 0x28] = len(name)
@@ -2756,10 +2756,10 @@ class TestPackageLabDomains(unittest.TestCase):
         payload[entry + 0x2F:entry + 0x32] = (1).to_bytes(3, "little")
         payload[entry + 0x32:entry + 0x34] = (0xFFFF).to_bytes(2, "big")
         payload[entry + 0x34:entry + 0x38] = (0x1004).to_bytes(4, "big")
-        payload[0xC000:0xD000] = b"A" * 0x1000
-        payload[0xE000:0xE004] = b"tail"
-        for block, offset in enumerate((0xB000, 0xC000, 0xD000, 0xE000)):
-            record = 0xA000 + block * 0x18
+        payload[0xD000:0xE000] = b"A" * 0x1000
+        payload[0xF000:0xF004] = b"tail"
+        for block, offset in enumerate((0xC000, 0xD000, 0xE000, 0xF000)):
+            record = 0xB000 + block * 0x18
             payload[record:record + 0x14] = hashlib.sha1(
                 payload[offset:offset + 0x1000]
             ).digest()
@@ -2784,7 +2784,7 @@ class TestPackageLabDomains(unittest.TestCase):
         self.assertEqual((output / "fragmented.bin").read_bytes(), b"replacement")
         self.assertTrue(verify_stfs(named).valid)
         changed = bytearray(named.read_bytes())
-        changed[0xC000] ^= 0xFF
+        changed[0xD000] ^= 0xFF
         named.write_bytes(changed)
         self.assertFalse(verify_stfs(named).valid)
 
@@ -2857,17 +2857,19 @@ class TestPackageLabDomains(unittest.TestCase):
         image[0x3000:0x3004] = b"FATX"
         source = self.temp_dir / "fatx.img"
         source.write_bytes(image)
-        self.assertEqual(inspect_fatx(source).entries[0].path, "game.bin")
+        self.assertEqual(inspect_fatx(source).entries[0].path, "Image/game.bin")
         output = self.temp_dir / "fatx-output"
         extract_fatx(source, output)
-        self.assertEqual((output / "game.bin").read_bytes(), b"FATX")
+        self.assertEqual((output / "Image" / "game.bin").read_bytes(), b"FATX")
         replacement = self.temp_dir / "replacement.bin"
         replacement.write_bytes(b"EDIT")
         edited = self.temp_dir / "edited.img"
-        replace_fatx_file(source, "game.bin", replacement, output=edited)
+        replace_fatx_file(source, "Image/game.bin", replacement, output=edited)
         edited_output = self.temp_dir / "fatx-edited-output"
         extract_fatx(edited, edited_output)
-        self.assertEqual((edited_output / "game.bin").read_bytes(), b"EDIT")
+        self.assertEqual(
+            (edited_output / "Image" / "game.bin").read_bytes(), b"EDIT"
+        )
 
     def test_gpd_achievement_edit_is_transactional(self):
         import struct

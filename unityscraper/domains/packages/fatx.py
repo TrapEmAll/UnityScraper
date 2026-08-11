@@ -78,7 +78,16 @@ def inspect_fatx(path: str | Path) -> FatxImage:
             )
             partition = _read_partition(handle, name, offset, next_offset - offset)
             partitions.append(partition)
-            entries.extend(_read_directory(handle, partition, partition.root_block, "", 0, set()))
+            entries.extend(
+                _read_directory(
+                    handle,
+                    partition,
+                    partition.root_block,
+                    partition.name,
+                    0,
+                    set(),
+                )
+            )
     if not partitions:
         raise InvalidPackageError("No supported FATX partitions were found")
     return FatxImage(source, tuple(partitions), tuple(entries))

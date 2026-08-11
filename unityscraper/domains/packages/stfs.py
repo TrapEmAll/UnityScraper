@@ -217,8 +217,7 @@ def read_stfs_layout(path: str | Path) -> StfsLayout:
     block_count = int.from_bytes(header[0x395:0x399], "big")
     if block_count <= 0 or block_count >= MAX_BLOCKS:
         raise InvalidPackageError("STFS allocated block count is invalid")
-    aligned = (header_size + 0xFFF) & 0xFFFFF000
-    shift = 0 if aligned == 0xB000 else 0 if separation & 1 else 1
+    shift = separation & 1
     top_index = (separation >> 1) & 1
     table_start = int.from_bytes(header[0x37E:0x381], "little")
     count_raw = header[0x37C:0x37E]
@@ -276,9 +275,8 @@ def inspect_stfs(path: str | Path) -> StfsPackage:
         raise InvalidPackageError("STFS package does not contain a usable TitleID")
     header_size = int.from_bytes(header[0x340:0x344], "big")
     block_count = int.from_bytes(header[0x395:0x399], "big")
-    aligned = (header_size + 0xFFF) & 0xFFFFF000
     separation = header[0x37B] & 0x3
-    structure_type = 0 if aligned == 0xB000 else 0 if separation & 1 else 1
+    structure_type = separation & 1
     return StfsPackage(
         path=package_path,
         magic=header[:4].decode("ascii").strip(),
@@ -351,7 +349,13 @@ def list_stfs_entries(path: str | Path, max_entries: int = 100_000) -> list[Stfs
                 parent = raw_entries[parent]["parent"]
             full_path = "/".join(reversed(ancestors))
             full_path = f"{full_path}/{row['name']}" if full_path else row["name"]
-            block_count = row["blocks"] if not row["directory"] else 0
+            block_count = (row["size"] + BLOCK_SIZE - 1) // BLOCK_SIZE
+            if not row["directory"] and block_count > row["blocks"]:
+                raise InvalidPackageError(
+                    f"STFS entry exceeds its declared allocation: {full_path}"
+                )
+            if row["directory"]:
+                block_count = 0
             blocks = (
                 layout.block_chain(
                     handle,
