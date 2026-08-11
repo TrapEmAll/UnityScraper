@@ -90,6 +90,7 @@ from unityscraper.domains.knowledge.models import EntityRecord as ModularEntityR
 from unityscraper.domains.library.models import GameSummary as ModularGameSummary
 from unityscraper.domains.library.service import LibraryService as ModularLibraryService
 from unityscraper.domains.packages.commands import InspectStfsPackage, InventoryStfsFileTable
+from unityscraper.domains.packages.stfs import verify_stfs
 from unityscraper.domains.tools.catalog import ToolCatalog as ModularToolCatalog
 from unityscraper.domains.tools.models import ToolDefinition as ModularToolDefinition
 from unityscraper.domains.tools.runner import ExternalToolRunner as ModularToolRunner
@@ -1596,16 +1597,17 @@ class TestBackupManager(unittest.TestCase):
         self.assertEqual(package.save_game_id, "12345678")
 
     def test_stfs_file_table_is_inventoried_read_only(self):
-        payload = bytearray(0xD000)
+        payload = bytearray(0xE000)
         payload[:4] = b"LIVE"
-        payload[0x340:0x344] = (0xA000).to_bytes(4, "big")
+        payload[0x340:0x344] = (0xB000).to_bytes(4, "big")
         payload[0x344:0x348] = (1).to_bytes(4, "big")
         payload[0x360:0x364] = bytes.fromhex("53510804")
         payload[0x379] = 0x24
-        payload[0x37B] = 1
-        payload[0x37C:0x37E] = (1).to_bytes(2, "big")
+        payload[0x37B] = 0
+        payload[0x37C:0x37E] = (1).to_bytes(2, "little")
+        payload[0x395:0x399] = (2).to_bytes(4, "big")
         name = b"savegame.dat"
-        entry = 0xB000
+        entry = 0xC000
         payload[entry:entry + len(name)] = name
         payload[entry + 0x28] = len(name) | 0x40
         payload[entry + 0x29:entry + 0x2C] = (1).to_bytes(3, "little")
@@ -1620,14 +1622,64 @@ class TestBackupManager(unittest.TestCase):
         self.assertEqual(entries[0].size, 123)
         self.assertTrue(entries[0].consecutive)
 
-        payload[0x379 + 0x1C:0x379 + 0x20] = (2).to_bytes(4, "big")
-        payload[0xC000:0xC004] = b"data"
+        payload[0xD000:0xD004] = b"data"
         package_path.write_bytes(payload)
         destination = self.temp_dir / "extracted"
         result = extract_stfs_files(package_path, destination)
         self.assertEqual((destination / "savegame.dat").read_bytes()[:4], b"data")
         self.assertEqual(result["extracted"][0]["size"], 123)
         self.assertTrue(Path(result["manifest"]).is_file())
+
+    def test_fragmented_stfs_extraction_and_integrity_verification(self):
+        payload = bytearray(0x11000)
+        payload[:4] = b"LIVE"
+        payload[0x340:0x344] = (0xB000).to_bytes(4, "big")
+        payload[0x344:0x348] = (1).to_bytes(4, "big")
+        payload[0x360:0x364] = bytes.fromhex("53510804")
+        payload[0x379] = 0x24
+        payload[0x37B] = 0
+        payload[0x37C:0x37E] = (1).to_bytes(2, "little")
+        payload[0x395:0x399] = (4).to_bytes(4, "big")
+
+        name = b"fragmented.bin"
+        entry = 0xC000
+        payload[entry:entry + len(name)] = name
+        payload[entry + 0x28] = len(name)
+        payload[entry + 0x29:entry + 0x2C] = (2).to_bytes(3, "little")
+        payload[entry + 0x2F:entry + 0x32] = (1).to_bytes(3, "little")
+        payload[entry + 0x32:entry + 0x34] = (0xFFFF).to_bytes(2, "big")
+        payload[entry + 0x34:entry + 0x38] = (0x1004).to_bytes(4, "big")
+        payload[0xD000:0xE000] = b"A" * 0x1000
+        payload[0xF000:0xF004] = b"tail"
+
+        for block, offset in enumerate((0xC000, 0xD000, 0xE000, 0xF000)):
+            record = 0xB000 + block * 0x18
+            payload[record:record + 0x14] = hashlib.sha1(
+                payload[offset:offset + 0x1000]
+            ).digest()
+            next_block = 3 if block == 1 else 0xFFFFFF
+            payload[record + 0x14:record + 0x18] = (
+                (2 << 30) | next_block
+            ).to_bytes(4, "big")
+
+        package_path = self.temp_dir / "fragmented.stfs"
+        package_path.write_bytes(payload)
+        entries = list_stfs_entries(package_path)
+        self.assertEqual(entries[0].blocks, (1, 3))
+
+        destination = self.temp_dir / "fragmented-output"
+        extract_stfs_files(package_path, destination)
+        self.assertEqual(
+            (destination / "fragmented.bin").read_bytes(),
+            b"A" * 0x1000 + b"tail",
+        )
+        self.assertTrue(verify_stfs(package_path).valid)
+
+        payload[0xD000] ^= 0xFF
+        package_path.write_bytes(payload)
+        report = verify_stfs(package_path)
+        self.assertFalse(report.valid)
+        self.assertEqual(report.mismatched_blocks, 1)
 
     def test_rejects_unknown_stfs_content_type(self):
         with self.assertRaises(InvalidPackageError):
@@ -2668,6 +2720,184 @@ class TestCommunityRoadmap(unittest.TestCase):
         self.assertFalse(comparison["identical"])
 
 
+class TestPackageLabDomains(unittest.TestCase):
+    """Package Lab format engines and transactional editing."""
+
+    def setUp(self):
+        self.temp_dir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir)
+
+    def test_fragmented_stfs_round_trip_and_tamper_detection(self):
+        from unityscraper.domains.packages import (
+            edit_stfs_metadata,
+            extract_stfs_files,
+            inspect_stfs,
+            list_stfs_entries,
+            replace_stfs_file,
+            verify_stfs,
+        )
+
+        payload = bytearray(0x11000)
+        payload[:4] = b"LIVE"
+        payload[0x340:0x344] = (0xB000).to_bytes(4, "big")
+        payload[0x344:0x348] = (1).to_bytes(4, "big")
+        payload[0x360:0x364] = bytes.fromhex("53510804")
+        payload[0x379] = 0x24
+        payload[0x37B] = 0
+        payload[0x37C:0x37E] = (1).to_bytes(2, "little")
+        payload[0x395:0x399] = (4).to_bytes(4, "big")
+        entry = 0xC000
+        name = b"fragmented.bin"
+        payload[entry:entry + len(name)] = name
+        payload[entry + 0x28] = len(name)
+        payload[entry + 0x29:entry + 0x2C] = (2).to_bytes(3, "little")
+        payload[entry + 0x2F:entry + 0x32] = (1).to_bytes(3, "little")
+        payload[entry + 0x32:entry + 0x34] = (0xFFFF).to_bytes(2, "big")
+        payload[entry + 0x34:entry + 0x38] = (0x1004).to_bytes(4, "big")
+        payload[0xD000:0xE000] = b"A" * 0x1000
+        payload[0xF000:0xF004] = b"tail"
+        for block, offset in enumerate((0xC000, 0xD000, 0xE000, 0xF000)):
+            record = 0xB000 + block * 0x18
+            payload[record:record + 0x14] = hashlib.sha1(
+                payload[offset:offset + 0x1000]
+            ).digest()
+            next_block = 3 if block == 1 else 0xFFFFFF
+            payload[record + 0x14:record + 0x18] = (
+                (2 << 30) | next_block
+            ).to_bytes(4, "big")
+        source = self.temp_dir / "fragmented.stfs"
+        source.write_bytes(payload)
+        self.assertEqual(list_stfs_entries(source)[0].blocks, (1, 3))
+        self.assertTrue(verify_stfs(source).valid)
+
+        replacement = self.temp_dir / "replacement.bin"
+        replacement.write_bytes(b"replacement")
+        edited = self.temp_dir / "edited.stfs"
+        replace_stfs_file(source, "fragmented.bin", replacement, output=edited)
+        named = self.temp_dir / "named.stfs"
+        edit_stfs_metadata(edited, {"display_name": "Edited Save"}, output=named)
+        self.assertEqual(inspect_stfs(named).display_name, "Edited Save")
+        output = self.temp_dir / "stfs-output"
+        extract_stfs_files(named, output)
+        self.assertEqual((output / "fragmented.bin").read_bytes(), b"replacement")
+        self.assertTrue(verify_stfs(named).valid)
+        changed = bytearray(named.read_bytes())
+        changed[0xD000] ^= 0xFF
+        named.write_bytes(changed)
+        self.assertFalse(verify_stfs(named).valid)
+
+    def test_gdf_and_svod_inventory_verification_and_extraction(self):
+        from unityscraper.domains.packages import (
+            extract_gdf,
+            extract_svod_payload,
+            inspect_gdf,
+            inspect_svod,
+            verify_svod,
+        )
+
+        image = bytearray(0x1800)
+        image[:20] = b"MICROSOFT*XBOX*MEDIA"
+        image[20:24] = (1).to_bytes(4, "little")
+        image[24:28] = (0x40).to_bytes(4, "little")
+        image[0x804:0x808] = (2).to_bytes(4, "little")
+        image[0x808:0x80C] = (7).to_bytes(4, "little")
+        image[0x80C] = 0x80
+        image[0x80D] = 10
+        image[0x80E:0x818] = b"readme.txt"
+        image[0x1000:0x1007] = b"xbox360"
+        gdf = self.temp_dir / "sample.iso"
+        gdf.write_bytes(image)
+        self.assertEqual(inspect_gdf(gdf).entries[0].path, "readme.txt")
+        gdf_output = self.temp_dir / "gdf-output"
+        extract_gdf(gdf, gdf_output)
+        self.assertEqual((gdf_output / "readme.txt").read_bytes(), b"xbox360")
+
+        header = bytearray(0xB000)
+        header[:4] = b"LIVE"
+        header[0x340:0x344] = (0xB000).to_bytes(4, "big")
+        header[0x344:0x348] = (0x00007000).to_bytes(4, "big")
+        header[0x360:0x364] = bytes.fromhex("53510804")
+        header[0x379:0x37D] = b"\x24\x05\x05\x11"
+        header[0x392:0x395] = (1).to_bytes(3, "big")
+        header[0x39D:0x3A1] = (1).to_bytes(4, "big")
+        header[0x3A1:0x3A9] = (4).to_bytes(8, "big")
+        svod = self.temp_dir / "god-header"
+        svod.write_bytes(header)
+        data_dir = svod.with_name(svod.name + ".data")
+        data_dir.mkdir()
+        data = bytearray(0x3000)
+        data[0x2000:0x2004] = b"GOD!"
+        data[0x1000:0x1014] = hashlib.sha1(data[0x2000:0x3000]).digest()
+        (data_dir / "Data0000").write_bytes(data)
+        self.assertEqual(inspect_svod(svod).block_count, 1)
+        self.assertTrue(verify_svod(svod).valid)
+        svod_output = self.temp_dir / "payload.iso"
+        extract_svod_payload(svod, svod_output)
+        self.assertEqual(svod_output.read_bytes(), b"GOD!")
+
+    def test_fatx_inventory_extraction_and_guarded_replacement(self):
+        from unityscraper.domains.packages import (
+            extract_fatx,
+            inspect_fatx,
+            replace_fatx_file,
+        )
+
+        image = bytearray(0x6000)
+        image[:4] = b"FATX"
+        image[8:12] = (8).to_bytes(4, "big")
+        image[12:16] = (1).to_bytes(4, "big")
+        image[0x1002:0x1004] = (0xFFFF).to_bytes(2, "big")
+        image[0x1004:0x1006] = (0xFFFF).to_bytes(2, "big")
+        image[0x2000] = 8
+        image[0x2002:0x200A] = b"game.bin"
+        image[0x202C:0x2030] = (2).to_bytes(4, "big")
+        image[0x2030:0x2034] = (4).to_bytes(4, "big")
+        image[0x3000:0x3004] = b"FATX"
+        source = self.temp_dir / "fatx.img"
+        source.write_bytes(image)
+        self.assertEqual(inspect_fatx(source).entries[0].path, "Image/game.bin")
+        output = self.temp_dir / "fatx-output"
+        extract_fatx(source, output)
+        self.assertEqual((output / "Image" / "game.bin").read_bytes(), b"FATX")
+        replacement = self.temp_dir / "replacement.bin"
+        replacement.write_bytes(b"EDIT")
+        edited = self.temp_dir / "edited.img"
+        replace_fatx_file(source, "Image/game.bin", replacement, output=edited)
+        edited_output = self.temp_dir / "fatx-edited-output"
+        extract_fatx(edited, edited_output)
+        self.assertEqual(
+            (edited_output / "Image" / "game.bin").read_bytes(), b"EDIT"
+        )
+
+    def test_gpd_achievement_edit_is_transactional(self):
+        import struct
+
+        from unityscraper.domains.profiles.gpd import set_gpd_achievement_state
+
+        strings = b"".join(
+            value.encode("utf-16-be") + b"\0\0"
+            for value in ("First Steps", "Locked text", "Unlocked text")
+        )
+        payload = bytearray(0x1C)
+        payload[4:8] = (7).to_bytes(4, "big", signed=True)
+        payload[8:12] = (42).to_bytes(4, "big", signed=True)
+        payload[12:16] = (25).to_bytes(4, "big")
+        entry_payload = bytes(payload) + strings
+        header = struct.pack(">4sIIIII", b"XDBF", 1, 1, 1, 0, 0)
+        entry = struct.pack(">Hqii", 1, 100, 0, len(entry_payload))
+        source = self.temp_dir / "53510804.gpd"
+        original = header + entry + entry_payload
+        source.write_bytes(original)
+        output = self.temp_dir / "edited.gpd"
+        report = set_gpd_achievement_state(
+            source, 7, "unlocked-offline", output=output
+        )
+        self.assertEqual(report.unlocked_count, 1)
+        self.assertEqual(source.read_bytes(), original)
+
+
 def run_tests():
     """Run all tests"""
     # Create test suite
@@ -2695,6 +2925,7 @@ def run_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestRoadmapFeatures))
     suite.addTests(loader.loadTestsFromTestCase(TestUnifiedV1Foundation))
     suite.addTests(loader.loadTestsFromTestCase(TestCommunityRoadmap))
+    suite.addTests(loader.loadTestsFromTestCase(TestPackageLabDomains))
     
     # Run tests
     runner = unittest.TextTestRunner(verbosity=2)

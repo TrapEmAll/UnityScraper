@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from backup_manager import (
+from .executables import inspect_xbe, inspect_xex
+from .stfs import (
     extract_stfs_files,
     inspect_stfs,
-    inspect_xbe,
-    inspect_xex,
     list_stfs_entries,
+    read_stfs_layout,
+    verify_stfs,
 )
 
 __all__ = [
@@ -16,4 +17,6 @@ __all__ = [
     "inspect_xbe",
     "inspect_xex",
     "list_stfs_entries",
+    "read_stfs_layout",
+    "verify_stfs",
 ]

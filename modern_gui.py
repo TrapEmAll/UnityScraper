@@ -51,6 +51,7 @@ from i18n import SUPPORTED_LANGUAGES, init_translator, t
 from unityscraper.domains.library import GameSummary, LibraryService
 from platform_support import open_path
 from profile_gui import ProfileSavePage
+from package_gui import PackageLabPage
 from profile_manager import ProfileSaveManager
 from setup_wizard import run_first_run_wizard
 from title_catalog import TitleSuggestion, XboxUnityTitleCatalog
@@ -416,6 +417,7 @@ class UnityScraperDesktop:
             )),
             ("Tools", (
                 ("Backup Manager", self.show_backups),
+                ("Package Lab", self.show_package_lab),
                 ("Tool Center", self.show_external_tools),
                 ("Archive Health", self.show_health),
                 ("Settings", self.show_settings),
@@ -482,6 +484,7 @@ class UnityScraperDesktop:
             (t("nav_downloads"), self.show_downloads),
             (t("nav_backups"), self.show_backups),
             (t("nav_profiles"), self.show_profiles),
+            ("Package Lab", self.show_package_lab),
             (t("nav_tools"), self.show_external_tools),
             (t("nav_collections"), self.show_collections),
             (t("nav_knowledge"), self.show_knowledge),
@@ -560,6 +563,14 @@ class UnityScraperDesktop:
             self.content,
             self._page_header,
             CONFIG_PATH,
+        )
+
+    def show_package_lab(self) -> None:
+        self._clear_content()
+        self.package_lab_page = PackageLabPage(
+            self.root,
+            self.content,
+            self._page_header,
         )
 
     def show_profiles(self) -> None:
