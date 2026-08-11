@@ -116,6 +116,14 @@ class StfsLayout:
         )
         return self.base_offset + self.base_hash_block(block, level) * BLOCK_SIZE + entry * 0x18
 
+    def active_hash_table_offset(self, handle: BinaryIO, block: int, level: int) -> int:
+        table_index = self._active_table_index(handle, block, level)
+        return (
+            self.base_offset
+            + self.base_hash_block(block, level) * BLOCK_SIZE
+            + table_index * BLOCK_SIZE
+        )
+
     def hash_record(self, handle: BinaryIO, block: int, level: int = 0) -> StfsHashRecord:
         table_index = self._active_table_index(handle, block, level)
         offset = self.base_hash_offset(block, level) + table_index * BLOCK_SIZE
@@ -214,14 +222,23 @@ def read_stfs_layout(path: str | Path) -> StfsLayout:
     top_index = (separation >> 1) & 1
     table_start = int.from_bytes(header[0x37E:0x381], "little")
     count_raw = header[0x37C:0x37E]
-    candidates = tuple(dict.fromkeys((int.from_bytes(count_raw, "little"), int.from_bytes(count_raw, "big"))))
+    candidates = tuple(
+        dict.fromkeys((int.from_bytes(count_raw, "little"), int.from_bytes(count_raw, "big")))
+    )
     table_blocks = 0
     for candidate in candidates:
         if not 0 < candidate <= 0x3FF:
             continue
         layout = StfsLayout(
-            header[:4], header_size, separation, candidate, table_start,
-            block_count, package_size, shift, top_index,
+            header[:4],
+            header_size,
+            separation,
+            candidate,
+            table_start,
+            block_count,
+            package_size,
+            shift,
+            top_index,
         )
         try:
             if layout.data_offset(table_start) + BLOCK_SIZE <= package_size:
@@ -232,8 +249,15 @@ def read_stfs_layout(path: str | Path) -> StfsLayout:
     if not table_blocks:
         raise InvalidPackageError("STFS file-table size is invalid")
     return StfsLayout(
-        header[:4], header_size, separation, table_blocks, table_start,
-        block_count, package_size, shift, top_index,
+        header[:4],
+        header_size,
+        separation,
+        table_blocks,
+        table_start,
+        block_count,
+        package_size,
+        shift,
+        top_index,
     )
 
 
@@ -287,24 +311,29 @@ def list_stfs_entries(path: str | Path, max_entries: int = 100_000) -> list[Stfs
         )
         raw_entries: list[dict[str, Any]] = []
         for logical_block in table_chain:
-            table = _read_exact(handle, layout.data_offset(logical_block), BLOCK_SIZE, layout.package_size)
+            table = _read_exact(
+                handle, layout.data_offset(logical_block), BLOCK_SIZE, layout.package_size
+            )
             for entry_offset in range(0, BLOCK_SIZE, 0x40):
-                data = table[entry_offset:entry_offset + 0x40]
+                data = table[entry_offset : entry_offset + 0x40]
                 if not any(data):
                     continue
                 flags = data[0x28]
                 name_length = flags & 0x3F
                 if name_length == 0 or name_length > 0x28:
                     continue
-                raw_entries.append({
-                    "name": data[:name_length].decode("utf-8", errors="replace"),
-                    "directory": bool(flags & 0x80),
-                    "consecutive": bool(flags & 0x40),
-                    "blocks": int.from_bytes(data[0x29:0x2C], "little"),
-                    "start": int.from_bytes(data[0x2F:0x32], "little"),
-                    "parent": int.from_bytes(data[0x32:0x34], "big"),
-                    "size": int.from_bytes(data[0x34:0x38], "big"),
-                })
+                raw_entries.append(
+                    {
+                        "name": data[:name_length].decode("utf-8", errors="replace"),
+                        "directory": bool(flags & 0x80),
+                        "consecutive": bool(flags & 0x40),
+                        "blocks": int.from_bytes(data[0x29:0x2C], "little"),
+                        "start": int.from_bytes(data[0x2F:0x32], "little"),
+                        "parent": int.from_bytes(data[0x32:0x34], "big"),
+                        "size": int.from_bytes(data[0x34:0x38], "big"),
+                        "table_offset": layout.data_offset(logical_block) + entry_offset,
+                    }
+                )
                 if len(raw_entries) > max_entries:
                     raise InvalidPackageError("STFS file table exceeds the safety limit")
 
@@ -323,24 +352,31 @@ def list_stfs_entries(path: str | Path, max_entries: int = 100_000) -> list[Stfs
             full_path = "/".join(reversed(ancestors))
             full_path = f"{full_path}/{row['name']}" if full_path else row["name"]
             block_count = row["blocks"] if not row["directory"] else 0
-            blocks = layout.block_chain(
-                handle,
-                row["start"],
-                block_count,
-                consecutive=row["consecutive"],
-            ) if block_count else ()
-            entries.append(StfsEntry(
-                index=index,
-                path=full_path,
-                name=row["name"],
-                is_directory=row["directory"],
-                consecutive=row["consecutive"],
-                allocated_blocks=row["blocks"],
-                starting_block=row["start"],
-                parent_index=row["parent"],
-                size=row["size"],
-                blocks=blocks,
-            ))
+            blocks = (
+                layout.block_chain(
+                    handle,
+                    row["start"],
+                    block_count,
+                    consecutive=row["consecutive"],
+                )
+                if block_count
+                else ()
+            )
+            entries.append(
+                StfsEntry(
+                    index=index,
+                    path=full_path,
+                    name=row["name"],
+                    is_directory=row["directory"],
+                    consecutive=row["consecutive"],
+                    allocated_blocks=row["blocks"],
+                    starting_block=row["start"],
+                    parent_index=row["parent"],
+                    size=row["size"],
+                    blocks=blocks,
+                    table_offset=row["table_offset"],
+                )
+            )
     return entries
 
 
@@ -354,7 +390,9 @@ def verify_stfs(path: str | Path, *, max_issues: int = 10_000) -> StfsIntegrityR
             checked += 1
             try:
                 record = layout.hash_record(handle, block)
-                data = _read_exact(handle, layout.data_offset(block), BLOCK_SIZE, layout.package_size)
+                data = _read_exact(
+                    handle, layout.data_offset(block), BLOCK_SIZE, layout.package_size
+                )
             except InvalidPackageError as exc:
                 mismatched += 1
                 if len(issues) < max_issues:
@@ -364,17 +402,27 @@ def verify_stfs(path: str | Path, *, max_issues: int = 10_000) -> StfsIntegrityR
             if not record.stored_sha1 or set(record.stored_sha1) == {"0"}:
                 unverifiable += 1
                 if len(issues) < max_issues:
-                    issues.append(StfsBlockVerification(
-                        block, "missing", record.stored_sha1, calculated,
-                        "Hash record is empty",
-                    ))
+                    issues.append(
+                        StfsBlockVerification(
+                            block,
+                            "missing",
+                            record.stored_sha1,
+                            calculated,
+                            "Hash record is empty",
+                        )
+                    )
             elif record.stored_sha1.lower() != calculated:
                 mismatched += 1
                 if len(issues) < max_issues:
-                    issues.append(StfsBlockVerification(
-                        block, "mismatch", record.stored_sha1, calculated,
-                        "Stored SHA-1 does not match the data block",
-                    ))
+                    issues.append(
+                        StfsBlockVerification(
+                            block,
+                            "mismatch",
+                            record.stored_sha1,
+                            calculated,
+                            "Stored SHA-1 does not match the data block",
+                        )
+                    )
             else:
                 valid += 1
     return StfsIntegrityReport(
@@ -396,7 +444,8 @@ def extract_stfs_files(
     requested = {item.replace("\\", "/") for item in selected_paths or ()}
     entries = list_stfs_entries(package)
     files = [
-        entry for entry in entries
+        entry
+        for entry in entries
         if not entry.is_directory and (not requested or entry.path in requested)
     ]
     if requested - {entry.path for entry in files}:
@@ -426,7 +475,9 @@ def extract_stfs_files(
                 with partial.open("xb") as destination_handle:
                     for block in entry.blocks:
                         size = min(remaining, BLOCK_SIZE)
-                        chunk = _read_exact(handle, layout.data_offset(block), size, layout.package_size)
+                        chunk = _read_exact(
+                            handle, layout.data_offset(block), size, layout.package_size
+                        )
                         destination_handle.write(chunk)
                         digest.update(chunk)
                         remaining -= size
@@ -435,23 +486,31 @@ def extract_stfs_files(
                 partial.replace(output)
             finally:
                 partial.unlink(missing_ok=True)
-            extracted.append({
-                "path": entry.path,
-                "output": str(output),
-                "size": entry.size,
-                "sha256": digest.hexdigest(),
-                "blocks": list(entry.blocks),
-            })
+            extracted.append(
+                {
+                    "path": entry.path,
+                    "output": str(output),
+                    "size": entry.size,
+                    "sha256": digest.hexdigest(),
+                    "blocks": list(entry.blocks),
+                }
+            )
     manifest = target / "unityscraper-stfs-extraction.json"
-    manifest.write_text(json.dumps({
-        "schema": 2,
-        "source": str(package),
-        "source_sha256": _sha256_file(package),
-        "read_only": True,
-        "supports_fragmented_files": True,
-        "extracted": extracted,
-        "skipped": skipped,
-    }, indent=2), encoding="utf-8")
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": 2,
+                "source": str(package),
+                "source_sha256": _sha256_file(package),
+                "read_only": True,
+                "supports_fragmented_files": True,
+                "extracted": extracted,
+                "skipped": skipped,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     return {"manifest": str(manifest), "extracted": extracted, "skipped": skipped}
 
 

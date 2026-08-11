@@ -41,6 +41,18 @@ class StfsEntry:
     parent_index: int
     size: int
     blocks: tuple[int, ...] = ()
+    table_offset: int = 0
+
+
+@dataclass(frozen=True)
+class StfsMutationResult:
+    source: Path
+    output: Path
+    operation: str
+    changed_paths: tuple[str, ...]
+    rehashed_blocks: int
+    signed: bool
+    sha256: str
 
 
 @dataclass(frozen=True)
@@ -108,6 +120,7 @@ __all__ = [
     "StfsEntry",
     "StfsHashRecord",
     "StfsIntegrityReport",
+    "StfsMutationResult",
     "StfsPackage",
     "XbePackage",
     "XexPackage",

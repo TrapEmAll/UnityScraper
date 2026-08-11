@@ -81,19 +81,18 @@ device.
 
 ## Current Safety Boundary
 
-This release deliberately does not:
+Profile inventory and restore deliberately do not:
 
-- edit achievements, GPD records, gamertags, or account blocks
+- edit gamertags or account credential blocks
 - change profile, console, or device ownership fields
-- rehash or resign modified CON packages
+- automatically resign modified CON packages
 - authenticate to Xbox Live or Microsoft accounts
 - store CPU keys, account credentials, or signing material
-- write raw FATX disks
+- write physical FATX disks
 
-Those operations can make a profile or save unusable when implemented
-incorrectly. Future editing and migration support should only ship with
-complete package verification, automatic pre-change snapshots, and
-well-tested cross-platform signing support.
+Package Lab separately provides transactional edits for existing GPD records
+and STFS files. It writes to a chosen output, rebuilds STFS hashes, and accepts
+only caller-supplied signing callbacks. See [Package Lab](PACKAGE_LAB.md).
 
 ## Profile Intelligence and Xenia
 

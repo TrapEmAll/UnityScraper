@@ -29,14 +29,16 @@ different lawfully obtained XeXTool build or another command-line utility.
 - **Archived source:** [mtolly/X360](https://github.com/mtolly/X360)
 - **License:** GNU General Public License version 3
 
-UnityScraper's profile and save implementation is new Python code informed by
-the public package/profile model and field layout documented in the X360
-library and Le Fluffie source. The original GPL text is preserved at
+UnityScraper's STFS, SVOD, GDF/XISO, FATX-image, GPD, profile, and save
+implementation is new Python code informed by the public format geometry and
+field layouts documented in the X360 library and Le Fluffie source. The
+original GPL text is preserved at
 `assets/references/lefluffie/X360-GPL-3.0.txt`.
 
 UnityScraper does not include Le Fluffie's executable, updater, embedded key
-resources, account-modification code, or artwork. The application credits
-Dalavin prominently and links to the archived corresponding source.
+resources, account credential modification, license-bypass behavior, or
+artwork. The application credits Dalavin prominently and links to the archived
+corresponding source.
 
 ## Tool Center Interoperability
 

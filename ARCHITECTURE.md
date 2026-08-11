@@ -41,6 +41,7 @@ filesystem, FTP, package, or database behavior directly.
 - `knowledge_gui.py` renders knowledge search, imports, sources, and conflicts.
 - `backup_gui.py` renders inventory, package, FTP, and converter workflows.
 - `profile_gui.py` renders privacy-aware profile/save inventory and snapshots.
+- `package_gui.py` renders STFS, SVOD, GDF/XISO, FATX-image, and GPD workflows.
 - `collection_gui.py` renders collection analysis, matching, reports, and
   repair previews.
 - `community_gui.py` renders unified search and the cross-domain community
@@ -82,7 +83,9 @@ results to Tk's main loop.
 
 - `main.py` contains the XboxUnity collector and shared configuration.
 - `resume.py` handles partial download state and verification.
-- `backup_manager.py` parses public STFS/XBE/XEX fields and performs safe
+- `unityscraper/domains/packages` owns bounded package/image parsing,
+  verification, extraction, and transactional mutation.
+- `backup_manager.py` retains compatibility exports and performs safe
   filesystem or FTP operations.
 - `knowledge_base.py` defines normalized knowledge records and resolution.
 - `consolemods_adapters.py`, `wiki_adapters.py`, and `dat_adapters.py` parse

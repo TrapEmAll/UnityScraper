@@ -53,21 +53,18 @@ def inspect_xex(path: str | Path) -> XexPackage:
     execution_offset = 0
     for index in range(optional_count):
         entry = 0x18 + index * 8
-        key = int.from_bytes(header[entry:entry + 4], "big")
-        value = int.from_bytes(header[entry + 4:entry + 8], "big")
+        key = int.from_bytes(header[entry : entry + 4], "big")
+        value = int.from_bytes(header[entry + 4 : entry + 8], "big")
         if key == 0x00040006:
             execution_offset = value
             break
     if not execution_offset or execution_offset + 24 > len(header):
         raise InvalidPackageError("XEX execution metadata is unavailable")
 
-    info = header[execution_offset:execution_offset + 24]
+    info = header[execution_offset : execution_offset + 24]
 
     def format_version(value: int) -> str:
-        return (
-            f"{(value >> 28) & 0xF}.{(value >> 24) & 0xF}."
-            f"{(value >> 8) & 0xFFFF}.{value & 0xFF}"
-        )
+        return f"{(value >> 28) & 0xF}.{(value >> 24) & 0xF}.{(value >> 8) & 0xFFFF}.{value & 0xFF}"
 
     return XexPackage(
         path=package_path,

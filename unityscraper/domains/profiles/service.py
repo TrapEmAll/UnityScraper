@@ -11,6 +11,13 @@ from profile_manager import (
 
 from .models import ProfileInfo, ProfileScanResult, RestoreResult, SaveInfo
 from .operations import find_content_root, mask_identifier
+from .gpd import (
+    export_gpd_image,
+    parse_gpd,
+    parse_gpd_bytes,
+    set_gpd_achievement_state,
+    update_gpd_setting,
+)
 
 __all__ = [
     "ProfileInfo",
@@ -23,4 +30,9 @@ __all__ = [
     "SaveInfo",
     "find_content_root",
     "mask_identifier",
+    "export_gpd_image",
+    "parse_gpd",
+    "parse_gpd_bytes",
+    "set_gpd_achievement_state",
+    "update_gpd_setting",
 ]
