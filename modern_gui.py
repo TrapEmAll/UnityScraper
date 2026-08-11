@@ -398,36 +398,39 @@ class UnityScraperDesktop:
         bar = ttk.Frame(self.root, style="Toolbar.TFrame", padding=(5, 1))
         bar.pack(side=tk.TOP, fill=tk.X)
 
-        file_menu = tk.Menu(self.root, tearoff=False, **menu_options)
-        file_menu.add_command(label="Add Games...", command=self.show_add_games)
-        file_menu.add_command(label="Open Application Data", command=lambda: _open_path(BASE_DIR))
-        file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self.root.destroy)
-        view_menu = tk.Menu(self.root, tearoff=False, **menu_options)
-        view_menu.add_command(label="Library", command=self.show_library)
-        view_menu.add_command(label="Downloads", command=self.show_downloads)
-        view_menu.add_command(label="Profiles & Saves", command=self.show_profiles)
-        view_menu.add_command(label="Knowledge", command=self.show_knowledge)
-        view_menu.add_command(label="Community Hub", command=self.show_community_hub)
-        tools_menu = tk.Menu(self.root, tearoff=False, **menu_options)
-        tools_menu.add_command(label="Backup Manager", command=self.show_backups)
-        tools_menu.add_command(label="Tool Center", command=self.show_external_tools)
-        tools_menu.add_command(label="Archive Health", command=self.show_health)
-        tools_menu.add_command(label="Settings", command=self.show_settings)
-        help_menu = tk.Menu(self.root, tearoff=False, **menu_options)
-        help_menu.add_command(label="Help & About", command=self.show_about)
-        help_menu.add_command(label="Check for Updates", command=self._check_updates)
+        menu_definitions: tuple[
+            tuple[str, tuple[tuple[str | None, Callable[[], Any] | None], ...]], ...
+        ] = (
+            ("File", (
+                ("Add Games...", self.show_add_games),
+                ("Open Application Data", lambda: _open_path(BASE_DIR)),
+                (None, None),
+                ("Exit", self.root.destroy),
+            )),
+            ("View", (
+                ("Library", self.show_library),
+                ("Downloads", self.show_downloads),
+                ("Profiles & Saves", self.show_profiles),
+                ("Knowledge", self.show_knowledge),
+                ("Community Hub", self.show_community_hub),
+            )),
+            ("Tools", (
+                ("Backup Manager", self.show_backups),
+                ("Tool Center", self.show_external_tools),
+                ("Archive Health", self.show_health),
+                ("Settings", self.show_settings),
+            )),
+            ("Help", (
+                ("Help & About", self.show_about),
+                ("Check for Updates", self._check_updates),
+            )),
+        )
 
-        for label, submenu in (
-            ("File", file_menu),
-            ("View", view_menu),
-            ("Tools", tools_menu),
-            ("Help", help_menu),
-        ):
+        self._dropdown_menus: list[tk.Menu] = []
+        for label, entries in menu_definitions:
             button = tk.Menubutton(
                 bar,
                 text=label,
-                menu=submenu,
                 background=PALETTE.chrome,
                 foreground=PALETTE.text,
                 activebackground=PALETTE.accent,
@@ -438,7 +441,15 @@ class UnityScraperDesktop:
                 padx=7,
                 pady=3,
             )
+            submenu = tk.Menu(button, tearoff=False, **menu_options)
+            for entry_label, command in entries:
+                if entry_label is None:
+                    submenu.add_separator()
+                else:
+                    submenu.add_command(label=entry_label, command=command)
+            button.configure(menu=submenu)
             button.pack(side=tk.LEFT)
+            self._dropdown_menus.append(submenu)
         self._menu = bar
 
     def _build_shell(self) -> None:
