@@ -27,6 +27,7 @@ a = Analysis(
         ('assets', 'assets'),
     ] + tk_datas,
     hiddenimports=collect_submodules('unityscraper') + [
+        'PIL._tkinter_finder',
         'backup_gui',
         'backup_manager',
         'backup_service',

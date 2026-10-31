@@ -6,7 +6,7 @@ Describe the user-visible change and why it is needed.
 
 - [ ] `python -m ruff check .`
 - [ ] `python -m compileall -q .`
-- [ ] `python tests.py`
+- [ ] `python -m tests.test_unityscraper` and `python -m tests.test_integration`
 - [ ] Windows build checked when packaging or GUI imports changed
 
 ## Compatibility

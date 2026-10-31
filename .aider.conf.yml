@@ -1,0 +1,4 @@
+read:
+  - AGENTS.md
+lint-cmd: python -m ruff check
+test-cmd: python -m tests.test_unityscraper
