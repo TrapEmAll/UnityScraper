@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 
 def _now() -> str:
@@ -72,6 +72,7 @@ def ensure_application_schema(connection: sqlite3.Connection) -> int:
         (9, "hardening and plugin runtime", _migration_hardening),
         (10, "release readiness workspaces", _migration_release_readiness),
         (11, "offline knowledge archive", _migration_offline_knowledge),
+        (12, "personal library and desktop automation", _migration_desktop_automation),
     )
     for version, name, migration in migrations:
         if version in applied:
@@ -839,6 +840,71 @@ def _migration_offline_knowledge(connection: sqlite3.Connection) -> None:
             files_seen INTEGER NOT NULL DEFAULT 0,
             files_imported INTEGER NOT NULL DEFAULT 0,
             errors TEXT
+        );
+        """
+    )
+
+
+def _migration_desktop_automation(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS game_user_data (
+            titleid TEXT PRIMARY KEY,
+            favorite INTEGER NOT NULL DEFAULT 0,
+            play_status TEXT NOT NULL DEFAULT '',
+            rating INTEGER CHECK (rating IS NULL OR rating BETWEEN 1 AND 5),
+            notes TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS game_tags (
+            titleid TEXT NOT NULL,
+            tag TEXT NOT NULL COLLATE NOCASE,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (titleid, tag)
+        );
+        CREATE INDEX IF NOT EXISTS idx_game_tags_tag ON game_tags(tag);
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            level TEXT NOT NULL CHECK (level IN ('info', 'success', 'warning', 'error')),
+            title TEXT NOT NULL,
+            message TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            read_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at);
+        CREATE TABLE IF NOT EXISTS watch_folders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            path TEXT NOT NULL UNIQUE,
+            label TEXT NOT NULL DEFAULT '',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            last_scan_at TEXT,
+            last_status TEXT,
+            last_item_count INTEGER,
+            last_new_count INTEGER,
+            last_error TEXT
+        );
+        CREATE TABLE IF NOT EXISTS watch_folder_items (
+            folder_id INTEGER NOT NULL,
+            path TEXT NOT NULL,
+            titleid TEXT,
+            name TEXT NOT NULL DEFAULT '',
+            content_type TEXT,
+            size INTEGER NOT NULL DEFAULT 0,
+            first_seen_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            PRIMARY KEY (folder_id, path),
+            FOREIGN KEY (folder_id) REFERENCES watch_folders(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS title_update_watchlist (
+            titleid TEXT PRIMARY KEY,
+            added_at TEXT NOT NULL,
+            last_checked_at TEXT,
+            last_status TEXT,
+            last_error TEXT,
+            known_update_count INTEGER NOT NULL DEFAULT 0,
+            new_update_count INTEGER NOT NULL DEFAULT 0
         );
         """
     )

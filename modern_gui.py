@@ -7,17 +7,15 @@ The original GUI remains available as an advanced tools window.
 
 from __future__ import annotations
 
-import json
 import queue
+import re
 import sqlite3
 import threading
 import tkinter as tk
 import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
-from typing import Any, Callable
-
-from PIL import Image, ImageOps, ImageTk
+from typing import Any, Callable, TypeVar
 
 from app_paths import (
     BASE_DIR,
@@ -29,6 +27,7 @@ from app_paths import (
     LANGUAGE_PACKS_DIR,
     TITLEIDS_PATH,
     describe_storage,
+    portable_mode_enabled,
     ensure_app_dirs,
     ensure_user_titleids_file,
     resource_path,
@@ -55,10 +54,28 @@ from package_gui import PackageLabPage
 from profile_manager import ProfileSaveManager
 from setup_wizard import run_first_run_wizard
 from title_catalog import TitleSuggestion, XboxUnityTitleCatalog
-from ui_theme import PALETTE, UI_FONT, apply_vs2010_theme
+from ui_theme import (
+    DEFAULT_ACCENT,
+    DEFAULT_THEME,
+    PALETTE,
+    UI_FONT,
+    apply_theme,
+    text_options,
+)
+from unityscraper.app.desktop.shell import (
+    NotificationPanel,
+    PageSpec,
+    ShortcutSheet,
+    Sidebar,
+    StatusBar,
+    ToastManager,
+)
+from unityscraper.core.config import read_config, update_config
+from unityscraper.core.notifications import NotificationService
 from updater import VersionChecker
 
 
+T = TypeVar("T")
 APP_VERSION = DISPLAY_VERSION
 PROJECT_CREATOR = "TrapEmAll"
 XEXTOOL_CREATOR = "xorloser"
@@ -71,17 +88,6 @@ COMMUNITY_MESSAGE = (
     "collection easier to care for and helps preserve a piece of gaming history "
     "for years to come."
 )
-
-BG = PALETTE.window
-PANEL = PALETTE.panel
-PANEL_ALT = PALETTE.panel_alt
-BORDER = PALETTE.border
-ACCENT = PALETTE.accent
-ACCENT_HOVER = PALETTE.accent_hot
-TEXT = PALETTE.text
-MUTED = PALETTE.muted
-DANGER = PALETTE.danger
-WARNING = PALETTE.warning
 
 
 def _open_path(path: Path) -> None:
@@ -99,112 +105,6 @@ def navigation_shortcut(index: int) -> str | None:
     if index == 10:
         return "0"
     return None
-
-
-
-class ResponsiveBackgroundBanner(ttk.Frame):
-    """Responsive, center-cropped image banner for application pages."""
-
-    def __init__(
-        self,
-        parent: tk.Misc,
-        image_path: Path,
-        title: str,
-        subtitle: str,
-        height: int = 280,
-    ) -> None:
-        super().__init__(parent)
-        self.image_path = image_path
-        self.title = title
-        self.subtitle = subtitle
-        self.banner_height = height
-        self._source_image: Image.Image | None = None
-        self._photo: ImageTk.PhotoImage | None = None
-        self._resize_job: str | None = None
-
-        self.canvas = tk.Canvas(
-            self,
-            height=self.banner_height,
-            highlightthickness=0,
-            borderwidth=0,
-            background=PALETTE.window,
-        )
-        self.canvas.pack(fill=tk.X, expand=True)
-
-        if self.image_path.exists():
-            try:
-                self._source_image = Image.open(self.image_path).convert("RGB")
-            except OSError:
-                self._source_image = None
-
-        self.bind("<Configure>", self._queue_redraw)
-        self.canvas.bind("<Configure>", self._queue_redraw)
-        self.after_idle(self._redraw)
-
-    def _queue_redraw(self, _event: tk.Event[Any] | None = None) -> None:
-        if self._resize_job is not None:
-            self.after_cancel(self._resize_job)
-        self._resize_job = self.after(60, self._redraw)
-
-    def _redraw(self) -> None:
-        self._resize_job = None
-        width = max(self.canvas.winfo_width(), 640)
-        height = self.banner_height
-        self.canvas.delete("all")
-
-        if self._source_image is not None:
-            image = self._cover_resize(self._source_image, width, height)
-            overlay = Image.new("RGB", image.size, PALETTE.window)
-            image = Image.blend(image, overlay, 0.45)
-            self._photo = ImageTk.PhotoImage(image)
-            self.canvas.create_image(0, 0, image=self._photo, anchor=tk.NW)
-        else:
-            self.canvas.create_rectangle(
-                0, 0, width, height, fill=PALETTE.window, outline=""
-            )
-            self.canvas.create_text(
-                width // 2,
-                height // 2,
-                text=f"Background not loaded: {self.image_path}",
-                anchor=tk.CENTER,
-                fill=PALETTE.muted,
-                font=(UI_FONT, 10),
-            )
-
-        self.canvas.create_rectangle(
-            0, height - 4, width, height, fill=PALETTE.accent, outline=""
-        )
-        self.canvas.create_text(
-            28,
-            54,
-            text=self.title,
-            anchor=tk.W,
-            fill=PALETTE.text,
-            font=(UI_FONT, 23, "bold"),
-        )
-        self.canvas.create_text(
-            30,
-            94,
-            text=self.subtitle,
-            anchor=tk.W,
-            fill=PALETTE.muted,
-            width=max(width - 60, 300),
-            font=(UI_FONT, 11),
-        )
-
-    @staticmethod
-    def _cover_resize(image: Image.Image, width: int, height: int) -> Image.Image:
-        """Fit the complete artwork inside the banner without destructive cropping."""
-        fitted = ImageOps.contain(
-            image,
-            (width, height),
-            method=Image.Resampling.LANCZOS,
-        )
-        background = Image.new("RGB", (width, height), PALETTE.window)
-        left = (width - fitted.width) // 2
-        top = (height - fitted.height) // 2
-        background.paste(fitted, (left, top))
-        return background
 
 
 class TitleAutocomplete(ttk.Frame):
@@ -234,17 +134,17 @@ class TitleAutocomplete(ttk.Frame):
         self.popup = tk.Toplevel(self)
         self.popup.withdraw()
         self.popup.overrideredirect(True)
-        self.popup.configure(background=BORDER)
+        self.popup.configure(background=PALETTE.border)
         self.popup.transient(self.winfo_toplevel())
         self.listbox = tk.Listbox(
             self.popup,
             height=8,
             background=PALETTE.field,
-            foreground=TEXT,
+            foreground=PALETTE.text,
             selectbackground=PALETTE.selection,
-            selectforeground=TEXT,
+            selectforeground=PALETTE.selection_text,
             highlightthickness=1,
-            highlightbackground=BORDER,
+            highlightbackground=PALETTE.border,
             relief=tk.FLAT,
             font=(UI_FONT, 10),
             activestyle="none",
@@ -340,27 +240,29 @@ class UnityScraperDesktop:
         self.title_catalog = XboxUnityTitleCatalog()
         self.accessibility = AccessibilityService()
         self.accessibility_preferences = self.accessibility.get()
+        self.notifications = NotificationService()
         self.current_game: str | None = None
+        self.current_page = ""
         self._catalog_syncing = False
         self._catalog_events: queue.Queue[tuple[str, Any]] = queue.Queue()
+        self._background_jobs = 0
 
         ensure_app_dirs()
         ensure_user_titleids_file()
 
         self.root.title(f"UnityScraper {APP_VERSION}")
-        config = self._read_config()
+        config = read_config()
         self.language = str(config.get("language", "en"))
         init_translator(self.language, LANGUAGE_PACKS_DIR)
-        scale = max(0.8, min(2.0, float(config.get("ui_scale", 1.0))))
-        if self.accessibility_preferences["large_text"]:
-            scale = min(2.0, scale + 0.25)
-        self.root.tk.call("tk", "scaling", scale)
-        self.root.geometry("1220x780")
-        self.root.minsize(980, 640)
+        self._system_scaling = float(self.root.tk.call("tk", "scaling"))
+        self.apply_ui_scale(float(config.get("ui_scale", 1.0)))
+        self._restore_window(config.get("window"))
+        self.root.minsize(1040, 680)
         self._set_icon()
         self._configure_style()
-        self._build_menubar()
-        self._build_shell()
+        self._build_ui(str(config.get("last_page", "library")))
+        self._bind_shortcuts()
+        self.root.protocol("WM_DELETE_WINDOW", self._close)
 
         if run_first_run_wizard(self.root):
             self.refresh_library()
@@ -370,60 +272,187 @@ class UnityScraperDesktop:
         else:
             self.root.after(0, self.root.destroy)
 
+    # ----------------------------------------------------------- shell
+
     def _set_icon(self) -> None:
+        self._icon_image: tk.PhotoImage | None = None
+        self._brand_image: tk.PhotoImage | None = None
         icon = resource_path("assets", "UnityScraper.png")
         if not icon.exists():
             return
         try:
             self._icon_image = tk.PhotoImage(file=str(icon))
             self.root.iconphoto(True, self._icon_image)
+            factor = max(1, self._icon_image.width() // 30)
+            self._brand_image = self._icon_image.subsample(factor, factor)
         except tk.TclError:
             pass
 
     def _configure_style(self) -> None:
-        apply_vs2010_theme(
+        config = read_config()
+        apply_theme(
             self.root,
+            theme=str(config.get("theme", DEFAULT_THEME)),
+            accent=str(config.get("accent", DEFAULT_ACCENT)),
             high_contrast=bool(self.accessibility_preferences["high_contrast"]),
             large_text=bool(self.accessibility_preferences["large_text"]),
         )
 
+    def apply_ui_scale(self, ui_scale: float) -> None:
+        """Scale relative to the display's native DPI; 1.0 is the system default size."""
+        scale = max(0.8, min(2.0, float(ui_scale)))
+        if self.accessibility_preferences["large_text"]:
+            scale = min(2.0, scale + 0.25)
+        self.root.tk.call("tk", "scaling", self._system_scaling * scale)
+
+    def rebuild(self) -> None:
+        """Re-apply the theme and rebuild every widget on the current page."""
+        self._configure_style()
+        self._build_ui(self.current_page)
+
+    def set_theme(self, theme: str, accent: str) -> None:
+        """Persist and apply a theme, rebuilding the window so every widget picks it up."""
+        update_config({"theme": theme, "accent": accent})
+        self.rebuild()
+
+    def _toggle_theme(self) -> None:
+        config = read_config()
+        current = str(config.get("theme", DEFAULT_THEME))
+        self.set_theme(
+            "light" if current == "dark" else "dark",
+            str(config.get("accent", DEFAULT_ACCENT)),
+        )
+
+    def _build_pages(self) -> list[PageSpec]:
+        entries: tuple[tuple[str, str, str, str, str], ...] = (
+            ("library", t("nav_library"), "Library", "▦",
+             "Browse games, cover art, MediaIDs, and title updates"),
+            ("add_games", t("nav_add_games"), "Library", "+",
+             "Import TitleIDs from the XboxUnity catalog or a file"),
+            ("downloads", t("nav_downloads"), "Library", "⇩",
+             "Download tools, queue, and logs"),
+            ("collections", t("nav_collections"), "Library", "▣",
+             "Collection snapshots, matching, and repair previews"),
+            ("backups", t("nav_backups"), "Console", "⛁",
+             "Scan, install, export, and transfer backups"),
+            ("profiles", t("nav_profiles"), "Console", "☺",
+             "Profiles, saves, snapshots, and achievements"),
+            ("package_lab", t("nav_package_lab"), "Console", "⬡",
+             "Inspect STFS, SVOD, GDF/XISO, FATX, and GPD files"),
+            ("external_tools", t("nav_tools"), "Console", "⚒",
+             "Run community tools such as extract-xiso and Xenia"),
+            ("knowledge", t("nav_knowledge"), "Knowledge", "✦",
+             "Search sourced Xbox 360 knowledge"),
+            ("community_hub", t("nav_community"), "Knowledge", "☷",
+             "Unified search and community workspaces"),
+            ("health", t("nav_health"), "System", "♥",
+             "Find missing, empty, and duplicate archive files"),
+            ("settings", t("nav_settings"), "System", "⚙",
+             "Appearance, storage, and network settings"),
+            ("about", t("nav_about"), "System", "ⓘ",
+             "Diagnostics, storage, credits, and updates"),
+        )
+        pages = []
+        for index, (key, label, group, icon, description) in enumerate(entries, start=1):
+            shortcut = navigation_shortcut(index)
+            pages.append(
+                PageSpec(
+                    key=key,
+                    label=label,
+                    group=group,
+                    icon=icon,
+                    show=lambda page=key: self.navigate(page),
+                    description=description,
+                    shortcut=f"Alt+{shortcut}" if shortcut else None,
+                )
+            )
+        return pages
+
+    def _build_ui(self, page_key: str) -> None:
+        for child in self.root.winfo_children():
+            if not isinstance(child, tk.Toplevel):
+                child.destroy()
+        self.pages = self._build_pages()
+        self._pages_by_key = {page.key: page for page in self.pages}
+
+        self._build_menubar()
+        mode = "Portable" if portable_mode_enabled() else "Installed"
+        self.status_bar = StatusBar(self.root, f"{mode}  ·  v{APP_VERSION}")
+        self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+        self.status_bar.set_jobs(self._background_jobs)
+
+        body = ttk.Frame(self.root, style="Content.TFrame")
+        body.pack(fill=tk.BOTH, expand=True)
+        self.sidebar = Sidebar(
+            body,
+            self.pages,
+            brand_image=self._brand_image,
+            version=f"v{APP_VERSION}",
+            show_hints=bool(self.accessibility_preferences["keyboard_hints"]),
+        )
+        self.sidebar.pack(side=tk.LEFT, fill=tk.Y)
+        tk.Frame(body, width=1, background=PALETTE.border).pack(side=tk.LEFT, fill=tk.Y)
+
+        main = ttk.Frame(body, style="Content.TFrame")
+        main.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._build_topbar(main)
+        self.content = ttk.Frame(main, padding=(26, 4, 26, 18), style="Content.TFrame")
+        self.content.pack(fill=tk.BOTH, expand=True)
+        self.content.columnconfigure(0, weight=1)
+        self.content.rowconfigure(1, weight=1)
+
+        self.toasts = ToastManager(self.root)
+        self.navigate(page_key if page_key in self._pages_by_key else "library")
+
+    def _build_topbar(self, parent: ttk.Frame) -> None:
+        bar = ttk.Frame(parent, padding=(26, 14, 26, 0), style="Content.TFrame")
+        bar.pack(fill=tk.X)
+        self.breadcrumb_var = tk.StringVar()
+        ttk.Label(bar, textvariable=self.breadcrumb_var, style="Small.TLabel").pack(side=tk.LEFT)
+
+        self.notification_button = ttk.Button(
+            bar, style="Header.TButton", command=self._open_notifications
+        )
+        self.notification_button.pack(side=tk.RIGHT)
+        theme = str(read_config().get("theme", DEFAULT_THEME))
+        ttk.Button(
+            bar,
+            text="☀  Light" if theme == "dark" else "☾  Dark",
+            style="Header.TButton",
+            command=self._toggle_theme,
+        ).pack(side=tk.RIGHT, padx=(0, 6))
+        self._refresh_notification_badge()
+
     def _build_menubar(self) -> None:
-        menu_options = {
-            "background": PALETTE.chrome,
-            "foreground": PALETTE.text,
-            "activebackground": PALETTE.accent,
-            "activeforeground": "#FFFFFF",
-            "borderwidth": 0,
-            "font": (UI_FONT, 9),
-        }
-        bar = ttk.Frame(self.root, style="Toolbar.TFrame", padding=(5, 1))
+        bar = ttk.Frame(self.root, style="Toolbar.TFrame", padding=(6, 2))
         bar.pack(side=tk.TOP, fill=tk.X)
+        page = self._pages_by_key
 
         menu_definitions: tuple[
             tuple[str, tuple[tuple[str | None, Callable[[], Any] | None], ...]], ...
         ] = (
             ("File", (
-                ("Add Games...", self.show_add_games),
+                ("Add Games...", page["add_games"].show),
                 ("Open Application Data", lambda: _open_path(BASE_DIR)),
                 (None, None),
-                ("Exit", self.root.destroy),
+                ("Exit", self._close),
             )),
-            ("View", (
-                ("Library", self.show_library),
-                ("Downloads", self.show_downloads),
-                ("Profiles & Saves", self.show_profiles),
-                ("Knowledge", self.show_knowledge),
-                ("Community Hub", self.show_community_hub),
+            ("View", tuple(
+                (spec.label, spec.show)
+                for spec in self.pages
+                if spec.group in {"Library", "Knowledge"}
+            ) + (
+                (None, None),
+                ("Toggle Light/Dark Theme", self._toggle_theme),
             )),
-            ("Tools", (
-                ("Backup Manager", self.show_backups),
-                ("Package Lab", self.show_package_lab),
-                ("Tool Center", self.show_external_tools),
-                ("Archive Health", self.show_health),
-                ("Settings", self.show_settings),
+            ("Tools", tuple(
+                (spec.label, spec.show)
+                for spec in self.pages
+                if spec.group in {"Console", "System"} and spec.key != "about"
             )),
             ("Help", (
-                ("Help & About", self.show_about),
+                ("Keyboard Shortcuts", self._show_shortcuts),
+                ("Help & About", page["about"].show),
                 ("Check for Updates", self._check_updates),
             )),
         )
@@ -434,16 +463,25 @@ class UnityScraperDesktop:
                 bar,
                 text=label,
                 background=PALETTE.chrome,
-                foreground=PALETTE.text,
-                activebackground=PALETTE.accent,
-                activeforeground="#FFFFFF",
+                foreground=PALETTE.muted,
+                activebackground=PALETTE.hover,
+                activeforeground=PALETTE.text,
                 borderwidth=0,
                 relief=tk.FLAT,
                 font=(UI_FONT, 9),
-                padx=7,
+                padx=8,
                 pady=3,
             )
-            submenu = tk.Menu(button, tearoff=False, **menu_options)
+            submenu = tk.Menu(
+                button,
+                tearoff=False,
+                background=PALETTE.panel_alt,
+                foreground=PALETTE.text,
+                activebackground=PALETTE.selection,
+                activeforeground=PALETTE.selection_text,
+                borderwidth=0,
+                font=(UI_FONT, 9),
+            )
             for entry_label, command in entries:
                 if entry_label is None:
                     submenu.add_separator()
@@ -454,98 +492,182 @@ class UnityScraperDesktop:
             self._dropdown_menus.append(submenu)
         self._menu = bar
 
-    def _build_shell(self) -> None:
-        self._wallpaper_source: Image.Image | None = None
-        self._wallpaper_photo: ImageTk.PhotoImage | None = None
-        wallpaper = resource_path("assets", "backgrounds", "unityscraper_full_background.png")
-        if wallpaper.exists() and not self.accessibility_preferences["high_contrast"]:
-            try:
-                self._wallpaper_source = Image.open(wallpaper).convert("RGB")
-            except OSError:
-                self._wallpaper_source = None
-
-        self.shell = tk.Canvas(self.root, background=BG, highlightthickness=0, borderwidth=0)
-        self.shell.pack(fill=tk.BOTH, expand=True)
-        self._wallpaper_item = self.shell.create_image(0, 0, anchor=tk.NW)
-
-        nav = ttk.Frame(self.shell, padding=(8, 10), style="Sidebar.TFrame")
-        self.content = ttk.Frame(self.shell, padding=12, style="Content.TFrame")
-        self._nav_window = self.shell.create_window(0, 0, anchor=tk.NW, window=nav)
-        self._content_window = self.shell.create_window(0, 0, anchor=tk.NW, window=self.content)
-
-        ttk.Label(nav, text="UNITY", style="Brand.TLabel").pack(anchor=tk.W, padx=6)
-        ttk.Label(nav, text="SCRAPER", style="AccentBrand.TLabel").pack(
-            anchor=tk.W, padx=6, pady=(0, 22)
-        )
-
-        pages = (
-            (t("nav_library"), self.show_library),
-            (t("nav_add_games"), self.show_add_games),
-            (t("nav_downloads"), self.show_downloads),
-            (t("nav_backups"), self.show_backups),
-            (t("nav_profiles"), self.show_profiles),
-            ("Package Lab", self.show_package_lab),
-            (t("nav_tools"), self.show_external_tools),
-            (t("nav_collections"), self.show_collections),
-            (t("nav_knowledge"), self.show_knowledge),
-            (t("nav_community"), self.show_community_hub),
-            (t("nav_health"), self.show_health),
-            (t("nav_settings"), self.show_settings),
-            (t("nav_about"), self.show_about),
-        )
-        for index, (label, callback) in enumerate(pages, start=1):
-            shortcut = navigation_shortcut(index)
-            display_label = label
-            if shortcut and self.accessibility_preferences["keyboard_hints"]:
-                display_label = f"{label}    Alt+{shortcut}"
-            ttk.Button(nav, text=display_label, command=callback, style="Nav.TButton", width=22).pack(
-                fill=tk.X, pady=1
-            )
-
-        status = ttk.Frame(nav, style="Statusbar.TFrame", padding=(7, 4))
-        status.pack(side=tk.BOTTOM, fill=tk.X)
-        ttk.Label(status, text="Ready", style="Statusbar.TLabel").pack(anchor=tk.W)
-
-        self.content.columnconfigure(0, weight=1)
-        self.content.rowconfigure(1, weight=1)
-        self.shell.bind("<Configure>", self._resize_shell)
-        self.root.after_idle(lambda: self._resize_shell(None))
-        for index, (_, callback) in enumerate(pages, start=1):
+    def _bind_shortcuts(self) -> None:
+        for index, page in enumerate(self._build_pages(), start=1):
             shortcut = navigation_shortcut(index)
             if shortcut:
                 self.root.bind(
                     f"<Alt-Key-{shortcut}>",
-                    lambda _event, action=callback: action(),
+                    lambda _event, key=page.key: self.navigate(key),
                 )
-        self.root.bind("<Control-l>", lambda _event: self.show_library())
+        self.root.bind("<Control-l>", lambda _event: self.navigate("library"))
         self.root.bind("<Control-k>", lambda _event: self.show_community_hub(focus_search=True))
-        self.show_library()
+        self.root.bind("<Control-comma>", lambda _event: self.navigate("settings"))
+        self.root.bind("<F5>", lambda _event: self.navigate(self.current_page))
+        self.root.bind("<F1>", lambda _event: self._show_shortcuts())
 
-    def _resize_shell(self, _event: tk.Event[Any] | None) -> None:
-        width = max(self.shell.winfo_width(), 980)
-        height = max(self.shell.winfo_height(), 640)
-        nav_width = 218
-        gap = 1
+    def _shortcut_list(self) -> list[tuple[str, str]]:
+        shortcuts = [(page.shortcut, page.label) for page in self.pages if page.shortcut]
+        return shortcuts + [
+            ("Ctrl+L", "Library"),
+            ("Ctrl+K", "Search everything (Community Hub)"),
+            ("Ctrl+,", "Settings"),
+            ("F5", "Reload the current page"),
+            ("F1", "This list"),
+        ]
 
-        if self._wallpaper_source is not None:
-            image = ImageOps.fit(
-                self._wallpaper_source, (width, height),
-                method=Image.Resampling.LANCZOS, centering=(0.5, 0.5)
-            )
-            image = Image.blend(image, Image.new("RGB", image.size, BG), 0.72)
-            self._wallpaper_photo = ImageTk.PhotoImage(image)
-            self.shell.itemconfigure(self._wallpaper_item, image=self._wallpaper_photo)
+    def _show_shortcuts(self) -> None:
+        ShortcutSheet(self.root, self._shortcut_list())
 
-        self.shell.coords(self._nav_window, 0, 0)
-        self.shell.itemconfigure(self._nav_window, width=nav_width, height=height)
-        self.shell.coords(self._content_window, nav_width + gap, 0)
-        self.shell.itemconfigure(
-            self._content_window, width=max(width - nav_width - gap, 1), height=height
-        )
+    def navigate(self, page_key: str) -> None:
+        """Show a registered page and mark it active in the sidebar."""
+        page = self._pages_by_key.get(page_key) or self._pages_by_key["library"]
+        self.current_page = page.key
+        self.sidebar.set_active(page.key)
+        self.breadcrumb_var.set(f"{page.group}  /  {page.label}")
+        getattr(self, f"show_{page.key}")()
 
     def _clear_content(self) -> None:
         for child in self.content.winfo_children():
             child.destroy()
+
+    def _page_header(self, title: str, subtitle: str) -> None:
+        header = ttk.Frame(self.content, style="Header.TFrame")
+        header.grid(row=0, column=0, sticky="ew", pady=(2, 16))
+        ttk.Label(header, text=title, style="Header.TLabel").pack(anchor=tk.W)
+        ttk.Label(header, text=subtitle, style="Subheader.TLabel").pack(
+            anchor=tk.W, pady=(3, 0)
+        )
+
+    # ----------------------------------------------- status, jobs, notices
+
+    def _on_ui_thread(self, callback: Callable[[], None]) -> bool:
+        """Run ``callback`` on the Tk thread; returns False when called there already."""
+        if threading.current_thread() is threading.main_thread():
+            return False
+        try:
+            self.root.after(0, callback)
+        except (RuntimeError, tk.TclError):
+            pass  # The window closed while a worker was finishing.
+        return True
+
+    def set_status(self, text: str) -> None:
+        """Update the window status bar; safe to call from worker threads."""
+        if not self._on_ui_thread(lambda: self.set_status(text)):
+            self.status_bar.set_text(text)
+
+    def notify(
+        self,
+        level: str,
+        title: str,
+        message: str = "",
+        *,
+        source: str = "",
+        toast: bool = True,
+    ) -> None:
+        """Record a notification and show a toast; safe to call from worker threads."""
+        if self._on_ui_thread(
+            lambda: self.notify(level, title, message, source=source, toast=toast)
+        ):
+            return
+        self.notifications.add(level, title, message, source)
+        if toast:
+            self.toasts.show(level, title, message)
+        self._refresh_notification_badge()
+
+    def _refresh_notification_badge(self) -> None:
+        count = self.notifications.unread_count()
+        self.notification_button.configure(
+            text=f"Notifications  {count}" if count else "Notifications"
+        )
+
+    def _open_notifications(self) -> None:
+        NotificationPanel(
+            self.root,
+            self.notification_button,
+            self.notifications,
+            self._refresh_notification_badge,
+        )
+
+    def run_background(
+        self,
+        label: str,
+        work: Callable[[], T],
+        on_success: Callable[[T], None] | None = None,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
+        """Run ``work`` on a daemon thread; callbacks run on the Tk thread.
+
+        Without ``on_error``, failures become an error notification.
+        """
+        self._background_jobs += 1
+        self.status_bar.set_jobs(self._background_jobs)
+        self.set_status(f"{label}…")
+
+        def finish(result: Any, error: Exception | None) -> None:
+            self._background_jobs -= 1
+            self.status_bar.set_jobs(self._background_jobs)
+            if error is not None:
+                self.set_status(f"{label} failed")
+                if on_error is not None:
+                    on_error(error)
+                else:
+                    self.notify("error", f"{label} failed", str(error), source=label)
+                return
+            self.set_status(f"{label} finished")
+            if on_success is not None:
+                on_success(result)
+
+        def worker() -> None:
+            try:
+                result = work()
+            except Exception as exc:
+                self._on_ui_thread(lambda error=exc: finish(None, error))
+            else:
+                self._on_ui_thread(lambda: finish(result, None))
+
+        threading.Thread(target=worker, name=label, daemon=True).start()
+
+    # ------------------------------------------------- window persistence
+
+    def _restore_window(self, saved: Any) -> None:
+        geometry = "1320x840"
+        zoomed = False
+        if isinstance(saved, dict):
+            match = re.fullmatch(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", str(saved.get("geometry", "")))
+            if match:
+                width, height, x, y = (int(value) for value in match.groups())
+                screen_w = self.root.winfo_screenwidth()
+                screen_h = self.root.winfo_screenheight()
+                width, height = min(width, screen_w), min(height, screen_h)
+                if 0 <= x < screen_w - 100 and 0 <= y < screen_h - 100:
+                    geometry = f"{width}x{height}+{x}+{y}"
+                else:
+                    geometry = f"{width}x{height}"
+            zoomed = bool(saved.get("zoomed"))
+        self.root.geometry(geometry)
+        if zoomed:
+            try:
+                self.root.state("zoomed")
+            except tk.TclError:
+                pass  # Not supported by every window manager.
+
+    def _close(self) -> None:
+        try:
+            zoomed = self.root.state() == "zoomed"
+            if zoomed:
+                self.root.state("normal")
+            update_config(
+                {
+                    "window": {"geometry": self.root.geometry(), "zoomed": zoomed},
+                    "last_page": self.current_page,
+                }
+            )
+        except (OSError, tk.TclError):
+            pass  # Never block closing on a failed preference write.
+        self.root.destroy()
+
+    # ------------------------------------------------------------- pages
 
     def show_backups(self) -> None:
         self._clear_content()
@@ -591,15 +713,6 @@ class UnityScraperDesktop:
             self.collections,
             self._page_header,
         )
-
-    def _page_header(self, title: str, subtitle: str) -> None:
-        header = ttk.Frame(self.content, style="Content.TFrame")
-        header.grid(row=0, column=0, sticky="ew", pady=(0, 14))
-        ttk.Label(header, text=title.upper(), style="Header.TLabel").pack(anchor=tk.W)
-        ttk.Label(header, text=subtitle, style="Subheader.TLabel").pack(
-            anchor=tk.W, pady=(5, 0)
-        )
-        tk.Frame(header, height=1, background=BORDER).pack(fill=tk.X, pady=(9, 0))
 
     def show_library(self) -> None:
         self._clear_content()
@@ -870,7 +983,7 @@ class UnityScraperDesktop:
         ttk.Label(
             catalog_row,
             textvariable=self.catalog_status_var,
-            foreground=MUTED,
+            style="Muted.TLabel",
         ).grid(row=0, column=0, sticky=tk.W)
         ttk.Button(
             catalog_row,
@@ -883,7 +996,7 @@ class UnityScraperDesktop:
             text="Selected TitleIDs:",
         ).grid(row=3, column=0, sticky=tk.W)
 
-        self.add_titleids_text = tk.Text(panel, height=8, wrap=tk.WORD, background=PALETTE.field, foreground=TEXT, insertbackground=ACCENT, selectbackground=PALETTE.selection, selectforeground=TEXT, relief=tk.FLAT, highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT)
+        self.add_titleids_text = tk.Text(panel, height=8, wrap=tk.WORD, padx=10, pady=8, **text_options())
         self.add_titleids_text.grid(row=4, column=0, sticky="ew", pady=8)
 
         actions = ttk.Frame(panel)
@@ -1105,19 +1218,19 @@ class UnityScraperDesktop:
         identifier = str(result.get("identifier", ""))
         if category == "game":
             self.current_game = identifier
-            self.show_library()
+            self.navigate("library")
             return
         if target.startswith("file:"):
             path = Path(target.removeprefix("file:"))
             _open_path(path.parent if path.is_file() else path)
             return
         if category in {"profile", "save", "achievement"}:
-            self.show_profiles()
+            self.navigate("profiles")
             self.profile_save_page.search_var.set(result.get("title", identifier))
             self.profile_save_page.refresh()
             return
         if category == "knowledge":
-            self.show_knowledge()
+            self.navigate("knowledge")
             self.knowledge_page.search_var.set(result.get("title", ""))
             self.knowledge_page.refresh_results()
             return
@@ -1145,7 +1258,7 @@ class UnityScraperDesktop:
             command=self._run_health_scan,
         ).grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
 
-        self.health_text = tk.Text(panel, wrap=tk.WORD, background=PALETTE.field, foreground=TEXT, insertbackground=ACCENT, selectbackground=PALETTE.selection, selectforeground=TEXT, relief=tk.FLAT, highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT)
+        self.health_text = tk.Text(panel, wrap=tk.WORD, padx=12, pady=10, **text_options())
         self.health_text.grid(row=1, column=0, sticky="nsew")
         self.health_text.insert(
             tk.END,
@@ -1195,7 +1308,7 @@ class UnityScraperDesktop:
             "Safe defaults are shown first; network tuning remains optional.",
         )
 
-        config = self._read_config()
+        config = read_config()
         panel = ttk.LabelFrame(self.content, text="Application Settings", padding=18)
         panel.grid(row=1, column=0, sticky="new")
         panel.columnconfigure(1, weight=1)
@@ -1272,8 +1385,7 @@ class UnityScraperDesktop:
             messagebox.showerror("Invalid folder", str(exc), parent=self.root)
             return
 
-        config = self._read_config()
-        config.update(
+        update_config(
             {
                 "output_dir": str(output),
                 "workers": self.workers_var.get(),
@@ -1284,22 +1396,13 @@ class UnityScraperDesktop:
                 "language": self.language_var.get(),
             }
         )
-        CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
-        self.root.tk.call("tk", "scaling", max(0.8, min(2.0, self.scale_var.get())))
+        self.apply_ui_scale(self.scale_var.get())
+        self.rebuild()
         messagebox.showinfo(
             "Settings",
             "Settings saved. Interface scaling applies immediately; language changes apply after restart.",
             parent=self.root,
         )
-
-    @staticmethod
-    def _read_config() -> dict[str, Any]:
-        if not CONFIG_PATH.exists():
-            return {}
-        try:
-            return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return {}
 
     def show_about(self) -> None:
         self._clear_content()
@@ -1352,7 +1455,7 @@ class UnityScraperDesktop:
         ttk.Label(
             message_panel,
             text=f"- {PROJECT_CREATOR}",
-            foreground=ACCENT,
+            style="Success.TLabel",
         ).pack(anchor=tk.W, pady=(10, 0))
 
         ttk.Button(

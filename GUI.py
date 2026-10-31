@@ -27,7 +27,7 @@ try:
     from main import UnityScraper, Config
     from i18n import init_translator, get_translator, t
     from updater import VersionChecker
-    from ui_theme import apply_vs2010_theme
+    from ui_theme import apply_theme
     from queue_manager import DownloadQueue
 except ImportError as e:
     print(f"Error: Missing required module: {e}")
@@ -90,7 +90,7 @@ class UnityScraperGUI:
     
     def setup_styles(self):
         """Configure ttk styles"""
-        apply_vs2010_theme(self.root)
+        apply_theme(self.root)
     
     def create_widgets(self):
         """Create all GUI widgets"""
