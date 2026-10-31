@@ -29,8 +29,8 @@ jobs:
         run: |
           python scripts/check_version.py --tag "${{ github.ref_name }}"
           python -m ruff check .
-          python tests.py
-          python integration_tests.py
+          python -m tests.test_unityscraper
+          python -m tests.test_integration
 
       - name: Generate software bill of materials
         run: python scripts/generate_sbom.py

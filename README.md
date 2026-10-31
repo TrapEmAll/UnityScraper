@@ -424,7 +424,8 @@ Run the same high-signal checks used in CI:
 ```powershell
 .\.venv\Scripts\python.exe -m ruff check .
 .\.venv\Scripts\python.exe -m compileall -q .
-.\.venv\Scripts\python.exe tests.py
+.\.venv\Scripts\python.exe -m tests.test_unityscraper
+.\.venv\Scripts\python.exe -m tests.test_integration
 ```
 
 Build the Windows executable:

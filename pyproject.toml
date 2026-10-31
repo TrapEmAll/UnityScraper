@@ -25,7 +25,7 @@ unityscraper = "unityscraper.app.desktop.entrypoint:main"
 unityscraper-cli = "unityscraper.app.cli.entrypoint:main"
 
 [tool.pytest.ini_options]
-testpaths = ["tests.py"]
+testpaths = ["tests"]
 addopts = "-ra"
 
 [tool.ruff]
