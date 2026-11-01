@@ -1,7 +1,8 @@
 {
-  "version": "1.3.0b1",
+  "version": "1.3.1b1",
   "name": "Modern Desktop and Personal Library",
   "changes": [
+    "Welcome screen scrolls and can be skipped without closing the app",
     "Redesigned desktop interface with grouped navigation and card layouts",
     "Dark, light, and high-contrast themes with five accent colors",
     "Home dashboard with attention items and recent activity",

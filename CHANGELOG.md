@@ -5,6 +5,8 @@ Notable changes to UnityScraper are documented here. The project follows
 
 ## [Unreleased]
 
+## [1.3.1-beta.1] - 2026-11-01
+
 ### Fixed
 
 - The welcome screen now scrolls and keeps its buttons visible at larger text
