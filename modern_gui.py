@@ -671,16 +671,19 @@ class UnityScraperDesktop:
         def finish(result: Any, error: Exception | None) -> None:
             self._background_jobs -= 1
             self.status_bar.set_jobs(self._background_jobs)
-            if error is not None:
-                self.set_status(f"{label} failed")
-                if on_error is not None:
-                    on_error(error)
-                else:
-                    self.notify("error", f"{label} failed", str(error), source=label)
-                return
-            self.set_status(f"{label} finished")
-            if on_success is not None:
-                on_success(result)
+            try:
+                if error is not None:
+                    self.set_status(f"{label} failed")
+                    if on_error is not None:
+                        on_error(error)
+                    else:
+                        self.notify("error", f"{label} failed", str(error), source=label)
+                    return
+                self.set_status(f"{label} finished")
+                if on_success is not None:
+                    on_success(result)
+            except tk.TclError:
+                pass  # The page that asked for the work was closed before it finished.
 
         def worker() -> None:
             try:
@@ -943,7 +946,23 @@ class UnityScraperDesktop:
             self.catalog_status_var.set(text)
 
     def _start_scheduled_tasks(self) -> None:
-        """Run every enabled background schedule that is due, each on its own worker."""
+        """Back up the database first if due, then run every other due schedule."""
+        backups = AutoBackupService(self.database.db_path)
+        if backups.schedule.is_due():
+            # A clean restore point before syncs write, and no lock contention with them.
+            self.run_background(
+                "Automatic database backup",
+                backups.run_if_due,
+                lambda _backup: self._start_sync_tasks(),
+                lambda error: (
+                    self.notify("error", "Automatic database backup failed", str(error)),
+                    self._start_sync_tasks(),
+                ),
+            )
+        else:
+            self._start_sync_tasks()
+
+    def _start_sync_tasks(self) -> None:
         if self.knowledge_scheduler.is_due():
             self.run_background(
                 "Scheduled knowledge refresh",
@@ -960,10 +979,6 @@ class UnityScraperDesktop:
                 lambda: watchlist.run_if_due(make_xboxunity_collector()),
                 lambda outcome: outcome and notify_check_results(self, outcome["result"]),
             )
-
-        backups = AutoBackupService(self.database.db_path)
-        if backups.schedule.is_due():
-            self.run_background("Automatic database backup", backups.run_if_due)
 
         watch_folders = WatchFolderService(self.database.db_path)
         if watch_folders.schedule().is_due():

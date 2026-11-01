@@ -50,12 +50,6 @@ class SettingsPage:
         self.accent = str(config.get("accent", DEFAULT_ACCENT))
         self.saved_scale = float(config.get("ui_scale", 1.0))
 
-        # Checkbuttons and radiobuttons default to the page background; match the card surface.
-        style = ttk.Style(app.root)
-        for widget in ("TCheckbutton", "TRadiobutton"):
-            style.configure(f"Card.{widget}", background=PALETTE.panel_alt)
-            style.map(f"Card.{widget}", background=[("active", PALETTE.panel_alt)])
-
         body = ttk.Frame(app.content)
         body.grid(row=1, column=0, sticky="nsew")
         body.columnconfigure(0, weight=1)

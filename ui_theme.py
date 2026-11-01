@@ -115,7 +115,7 @@ def font(size: str = "base", weight: str = "normal") -> tuple[str, int, str]:
 
 
 def text_options() -> dict[str, object]:
-    """Options that theme a raw ``tk.Text`` or ``tk.Listbox`` like ttk inputs."""
+    """Options that theme a raw ``tk.Text`` like ttk inputs."""
     return {
         "background": PALETTE.field,
         "foreground": PALETTE.text,
@@ -339,6 +339,8 @@ def apply_theme(
             indicatorbackground=[("selected", p.accent), ("active", p.hover)],
             indicatorforeground=[("selected", p.on_accent)],
         )
+        style.configure(f"Card.{widget}", background=p.panel_alt)
+        style.map(f"Card.{widget}", background=[("active", p.panel_alt)])
 
     # Data views
     style.configure(
