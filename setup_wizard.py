@@ -16,6 +16,7 @@ from app_paths import (
     ensure_user_titleids_file,
 )
 from platform_support import desktop_font_family
+from ui_theme import PALETTE
 from knowledge_scheduler import KnowledgeScheduler
 
 
@@ -23,16 +24,15 @@ UI_FONT = desktop_font_family()
 
 
 class SetupWizard(tk.Toplevel):
-    """Small first-run wizard that records safe defaults."""
+    """Small first-run wizard that records safe defaults; closing it skips setup."""
 
     def __init__(self, parent: tk.Misc) -> None:
         super().__init__(parent)
         self.parent = parent
-        self.completed = False
         self.title("Welcome to UnityScraper")
-        self.geometry("650x610")
-        self.resizable(False, False)
+        self.configure(background=PALETTE.panel)
         self.transient(parent)
+        self.protocol("WM_DELETE_WINDOW", self._skip)
         self.grab_set()
 
         ensure_app_dirs()
@@ -48,8 +48,40 @@ class SetupWizard(tk.Toplevel):
         self._build()
 
     def _build(self) -> None:
-        container = ttk.Frame(self, padding=24)
-        container.pack(fill=tk.BOTH, expand=True)
+        buttons = ttk.Frame(self, padding=(24, 12))
+        buttons.pack(side=tk.BOTTOM, fill=tk.X)
+        ttk.Button(
+            buttons, text="Finish Setup", style="Accent.TButton", command=self._finish
+        ).pack(side=tk.RIGHT)
+        ttk.Button(buttons, text="Skip for now", command=self._skip).pack(
+            side=tk.RIGHT, padx=(0, 8)
+        )
+        ttk.Separator(self).pack(side=tk.BOTTOM, fill=tk.X)
+
+        # The form scrolls so the buttons stay reachable at any text size or screen height.
+        scrollbar = ttk.Scrollbar(self, orient=tk.VERTICAL)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas = tk.Canvas(
+            self, background=PALETTE.panel, highlightthickness=0, borderwidth=0,
+            yscrollcommand=scrollbar.set,
+        )
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.configure(command=canvas.yview)
+        container = ttk.Frame(canvas, padding=24)
+        window = canvas.create_window(0, 0, window=container, anchor=tk.NW)
+        container.bind(
+            "<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window, width=event.width))
+
+        def scroll(event: tk.Event) -> None:
+            step = -1 if event.num == 4 or event.delta > 0 else 1
+            canvas.yview_scroll(step * 2, "units")
+
+        # Every child has this Toplevel in its bindtags, so the wheel works anywhere on it.
+        for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            self.bind(sequence, scroll)
+        self._canvas, self._container, self._buttons = canvas, container, buttons
 
         ttk.Label(
             container,
@@ -125,15 +157,17 @@ class SetupWizard(tk.Toplevel):
             wraplength=560,
         ).pack(anchor=tk.W)
 
-        buttons = ttk.Frame(container)
-        buttons.pack(side=tk.BOTTOM, fill=tk.X)
+        self.after_idle(self._fit_to_screen)
 
-        ttk.Button(buttons, text="Cancel", command=self.destroy).pack(side=tk.RIGHT)
-        ttk.Button(
-            buttons,
-            text="Finish Setup",
-            command=self._finish,
-        ).pack(side=tk.RIGHT, padx=(0, 8))
+    def _fit_to_screen(self) -> None:
+        self.update_idletasks()
+        width = max(660, self._container.winfo_reqwidth() + 20)
+        height = min(
+            self._container.winfo_reqheight() + self._buttons.winfo_reqheight() + 4,
+            self.winfo_screenheight() - 120,
+        )
+        self.minsize(520, 320)
+        self.geometry(f"{width}x{height}")
 
     def _browse(self) -> None:
         selected = filedialog.askdirectory(
@@ -200,15 +234,18 @@ class SetupWizard(tk.Toplevel):
         )
 
         FIRST_RUN_PATH.write_text("complete\n", encoding="utf-8")
-        self.completed = True
+        self.destroy()
+
+    def _skip(self) -> None:
+        """Close without changes; defaults apply and everything is editable in Settings."""
+        try:
+            FIRST_RUN_PATH.write_text("skipped\n", encoding="utf-8")
+        except OSError:
+            pass  # The wizard will simply show again next launch.
         self.destroy()
 
 
-def run_first_run_wizard(parent: tk.Misc) -> bool:
-    """Run the wizard when setup has not yet been completed."""
-    if FIRST_RUN_PATH.exists():
-        return True
-
-    wizard = SetupWizard(parent)
-    parent.wait_window(wizard)
-    return wizard.completed
+def run_first_run_wizard(parent: tk.Misc) -> None:
+    """Show the wizard once, until it is finished or skipped."""
+    if not FIRST_RUN_PATH.exists():
+        parent.wait_window(SetupWizard(parent))
