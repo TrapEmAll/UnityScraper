@@ -5,6 +5,12 @@ Notable changes to UnityScraper are documented here. The project follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The welcome screen now scrolls and keeps its buttons visible at larger text
+  sizes; closing it (or "Skip for now") opens the app with default settings
+  instead of quitting.
+
 ## [1.3.0-beta.1] - 2026-11-01
 
 ### Added

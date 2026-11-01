@@ -270,13 +270,12 @@ class UnityScraperDesktop:
         self._bind_shortcuts()
         self.root.protocol("WM_DELETE_WINDOW", self._close)
 
-        if run_first_run_wizard(self.root):
-            self._refresh_library_page()
-            if bool(config.get("sync_title_catalog_on_start", True)):
-                self.root.after(750, self._start_catalog_sync_if_stale)
-            self.root.after(1500, self._start_scheduled_tasks)
-        else:
-            self.root.after(0, self.root.destroy)
+        run_first_run_wizard(self.root)
+        self._refresh_library_page()
+        # Re-read: the wizard may have just saved the catalog preference.
+        if bool(read_config().get("sync_title_catalog_on_start", True)):
+            self.root.after(750, self._start_catalog_sync_if_stale)
+        self.root.after(1500, self._start_scheduled_tasks)
 
     # ----------------------------------------------------------- shell
 
