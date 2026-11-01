@@ -6,7 +6,7 @@ import threading
 import tkinter as tk
 from pathlib import Path
 from pathlib import PurePosixPath
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Callable, Optional
 
 from backup_manager import (
@@ -18,6 +18,13 @@ from backup_manager import (
 )
 from backup_service import BackupService
 from console_sync import ConsoleSyncService
+from unityscraper.app.desktop.shell import relative_time
+from unityscraper.core.scheduling import parse_time
+from unityscraper.domains.backups.watch_folders import (
+    WatchFolder,
+    WatchFolderService,
+    WatchScanSummary,
+)
 
 
 class BackupPage:
@@ -29,11 +36,17 @@ class BackupPage:
         parent: ttk.Frame,
         service: BackupService,
         page_header: Callable[[str, str], None],
+        *,
+        notify: Callable[[str, str, str], None] | None = None,
     ):
         self.root = root
         self.parent = parent
         self.service = service
+        self.notify = notify
         self.console_sync = ConsoleSyncService(service.repository.db_path)
+        self.watch = WatchFolderService(service.repository.db_path)
+        self.watch_schedule = self.watch.schedule()
+        self.watch_folders: dict[str, WatchFolder] = {}
         self.items: dict[str, BackupItem] = {}
         self.busy = False
 
@@ -74,12 +87,15 @@ class BackupPage:
         self.library_tab = ttk.Frame(notebook, padding=10)
         self.transfer_tab = ttk.Frame(notebook, padding=10)
         self.converter_tab = ttk.Frame(notebook, padding=10)
+        self.watch_tab = ttk.Frame(notebook, padding=16)
         notebook.add(self.library_tab, text="Inventory")
         notebook.add(self.transfer_tab, text="Console Transfer")
         notebook.add(self.converter_tab, text="ISO Converter")
+        notebook.add(self.watch_tab, text="Watch Folders")
         self._build_inventory()
         self._build_transfer()
         self._build_converter()
+        self._build_watch_folders()
 
         self.status_var = tk.StringVar(value="Choose a target folder to begin.")
         ttk.Label(body, textvariable=self.status_var, style="Subheader.TLabel").grid(
@@ -232,6 +248,265 @@ class BackupPage:
             command=self.run_converter,
             style="Accent.TButton",
         ).grid(row=5, column=0, columnspan=3, sticky=tk.W)
+
+    @staticmethod
+    def _table(
+        parent: ttk.Frame, row: int, columns: tuple[tuple[str, str, int, str], ...], height: int
+    ) -> ttk.Treeview:
+        tree = ttk.Treeview(
+            parent,
+            columns=[column[0] for column in columns[1:]],
+            show="tree headings",
+            selectmode="browse",
+            height=height,
+        )
+        for column, text, width, anchor in columns:
+            tree.heading(column, text=text)
+            tree.column(column, width=width, minwidth=60, anchor=anchor)
+        tree.grid(row=row, column=0, sticky="nsew")
+        scrollbar = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=tree.yview)
+        scrollbar.grid(row=row, column=1, sticky="ns")
+        tree.configure(yscrollcommand=scrollbar.set)
+        return tree
+
+    def _build_watch_folders(self) -> None:
+        tab = self.watch_tab
+        tab.columnconfigure(0, weight=1)
+        tab.rowconfigure(1, weight=3)
+        tab.rowconfigure(4, weight=2)
+
+        header = ttk.Frame(tab)
+        header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+        header.columnconfigure(0, weight=1)
+        ttk.Label(
+            header,
+            text=(
+                "Folders you own are rescanned and you are notified about new content. "
+                "The first scan records a baseline."
+            ),
+            style="Muted.TLabel",
+        ).grid(row=0, column=0, sticky=tk.W)
+        schedule = self.watch_schedule.status()
+        self.watch_auto_var = tk.BooleanVar(value=bool(schedule.get("enabled")))
+        self.watch_interval_var = tk.StringVar(value=str(schedule.get("interval_hours") or 12))
+        ttk.Checkbutton(
+            header,
+            text="Automatic scan",
+            variable=self.watch_auto_var,
+            command=self._save_watch_schedule,
+        ).grid(row=0, column=1, padx=(16, 8))
+        ttk.Label(header, text="Every", style="Muted.TLabel").grid(row=0, column=2)
+        interval = ttk.Combobox(
+            header,
+            textvariable=self.watch_interval_var,
+            values=("6", "12", "24", "48"),
+            width=4,
+            state="readonly",
+        )
+        interval.grid(row=0, column=3, padx=6)
+        interval.bind("<<ComboboxSelected>>", lambda _event: self._save_watch_schedule())
+        ttk.Label(header, text="hours", style="Muted.TLabel").grid(row=0, column=4)
+
+        self.watch_tree = self._table(
+            tab,
+            1,
+            (
+                ("#0", "Folder", 160, tk.W),
+                ("path", "Path", 260, tk.W),
+                ("enabled", "Enabled", 70, tk.CENTER),
+                ("last_scan", "Last Scan", 100, tk.CENTER),
+                ("items", "Items", 70, tk.E),
+                ("new", "New", 60, tk.E),
+                ("status", "Status", 160, tk.W),
+            ),
+            height=6,
+        )
+        self.watch_tree.bind("<<TreeviewSelect>>", self._show_watch_items)
+
+        controls = ttk.Frame(tab)
+        controls.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        ttk.Button(
+            controls,
+            text="Add Folder…",
+            command=self.add_watch_folder,
+            style="Accent.TButton",
+        ).pack(side=tk.LEFT)
+        ttk.Button(controls, text="Remove", command=self.remove_watch_folder).pack(
+            side=tk.LEFT, padx=(8, 0)
+        )
+        self.watch_toggle_button = ttk.Button(
+            controls, text="Enable / Disable", command=self.toggle_watch_folder
+        )
+        self.watch_toggle_button.pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(controls, text="Scan Selected", command=self.scan_watch_folder).pack(
+            side=tk.LEFT, padx=(8, 0)
+        )
+        ttk.Button(controls, text="Scan All", command=self.scan_all_watch_folders).pack(
+            side=tk.LEFT, padx=(8, 0)
+        )
+
+        ttk.Label(tab, text="Recent New Items", style="Section.TLabel").grid(
+            row=3, column=0, columnspan=2, sticky=tk.W, pady=(20, 8)
+        )
+        self.watch_items_tree = self._table(
+            tab,
+            4,
+            (
+                ("#0", "Name", 240, tk.W),
+                ("titleid", "TitleID", 90, tk.CENTER),
+                ("type", "Type", 140, tk.W),
+                ("size", "Size", 90, tk.E),
+                ("first_seen", "First Seen", 130, tk.CENTER),
+            ),
+            height=5,
+        )
+        self._refresh_watch_folders()
+
+    def _refresh_watch_folders(self) -> None:
+        selected = list(self.watch_tree.selection())
+        self.watch_folders = {str(folder.id): folder for folder in self.watch.list()}
+        self.watch_tree.delete(*self.watch_tree.get_children())
+        for key, folder in self.watch_folders.items():
+            if folder.last_status == "failed":
+                status = f"Failed: {folder.last_error or 'unknown error'}"
+            else:
+                status = "OK" if folder.last_status == "ok" else "Not scanned"
+            self.watch_tree.insert(
+                "",
+                tk.END,
+                iid=key,
+                text=folder.label or Path(folder.path).name or folder.path,
+                values=(
+                    folder.path,
+                    "Yes" if folder.enabled else "No",
+                    relative_time(folder.last_scan_at) if folder.last_scan_at else "Never",
+                    "" if folder.last_item_count is None else folder.last_item_count,
+                    "" if folder.last_new_count is None else folder.last_new_count,
+                    status,
+                ),
+            )
+        kept = [key for key in selected if key in self.watch_folders]
+        if kept:
+            self.watch_tree.selection_set(kept)
+        self._show_watch_items()
+
+    def _show_watch_items(self, _event: object = None) -> None:
+        self.watch_items_tree.delete(*self.watch_items_tree.get_children())
+        folder = self._selected_watch_folder(quiet=True)
+        if folder is None:
+            return
+        self.watch_toggle_button.configure(text="Disable" if folder.enabled else "Enable")
+        for index, item in enumerate(self.watch.recent_new_items(folder.id)):
+            first_seen = parse_time(item["first_seen_at"])
+            self.watch_items_tree.insert(
+                "",
+                tk.END,
+                iid=str(index),
+                text=item["name"] or Path(item["path"]).name,
+                values=(
+                    item["titleid"] or "Unknown",
+                    item["content_type"] or "",
+                    self._size(item["size"]),
+                    first_seen.astimezone().strftime("%Y-%m-%d %H:%M") if first_seen else "",
+                ),
+            )
+
+    def _selected_watch_folder(self, quiet: bool = False) -> Optional[WatchFolder]:
+        selected = self.watch_tree.selection()
+        if not selected:
+            if not quiet:
+                messagebox.showinfo(
+                    "Watch Folders", "Select a watched folder first.", parent=self.root
+                )
+            return None
+        return self.watch_folders.get(selected[0])
+
+    def _save_watch_schedule(self) -> None:
+        hours = int(self.watch_interval_var.get())
+        enabled = self.watch_auto_var.get()
+        self.watch_schedule.configure(enabled, hours)
+        self.status_var.set(
+            f"Automatic folder scan every {hours} hours." if enabled
+            else "Automatic folder scan is off."
+        )
+
+    def add_watch_folder(self) -> None:
+        path = filedialog.askdirectory(parent=self.root, title="Choose folder to watch")
+        if not path:
+            return
+        label = simpledialog.askstring(
+            "Watch Folders", "Optional label for this folder:", parent=self.root
+        )
+        if label is None:
+            return
+        try:
+            folder = self.watch.add(path, label)
+        except ValueError as exc:
+            messagebox.showwarning("Watch Folders", str(exc), parent=self.root)
+            return
+        self._refresh_watch_folders()
+        self.watch_tree.selection_set(str(folder.id))
+        self._scan_watch_folder(folder, f"Recording baseline for {folder.display_name}...")
+
+    def remove_watch_folder(self) -> None:
+        folder = self._selected_watch_folder()
+        if folder and messagebox.askyesno(
+            "Watch Folders",
+            f"Stop watching {folder.display_name}? Its scan history is removed; "
+            "files on disk are not touched.",
+            parent=self.root,
+        ):
+            self.watch.remove(folder.id)
+            self._refresh_watch_folders()
+
+    def toggle_watch_folder(self) -> None:
+        folder = self._selected_watch_folder()
+        if folder:
+            self.watch.set_enabled(folder.id, not folder.enabled)
+            self._refresh_watch_folders()
+
+    def scan_watch_folder(self) -> None:
+        folder = self._selected_watch_folder()
+        if folder:
+            self._scan_watch_folder(folder, f"Scanning {folder.display_name}...")
+
+    def _scan_watch_folder(self, folder: WatchFolder, message: str) -> None:
+        def work() -> WatchScanSummary:
+            # Failures come back as data so the folder table refreshes with the failed status.
+            try:
+                return WatchScanSummary([self.watch.scan(folder.id, self.service.title_name)])
+            except Exception as exc:
+                return WatchScanSummary(failures=[(folder, str(exc))])
+
+        self._run(message, work, self._watch_scan_done)
+
+    def scan_all_watch_folders(self) -> None:
+        self._run(
+            "Scanning watched folders...",
+            lambda: self.watch.scan_all(self.service.title_name),
+            self._watch_scan_done,
+        )
+
+    def _watch_scan_done(self, summary: WatchScanSummary) -> None:
+        self._refresh_watch_folders()
+        if self.notify:
+            for result in summary.results:
+                if result.new_items:
+                    self.notify(
+                        "success",
+                        f"New content in {result.folder.display_name}",
+                        f"{len(result.new_items)} new item(s)",
+                    )
+        self.status_var.set(
+            f"Scanned {len(summary.results)} folder(s): {summary.new_count} new item(s), "
+            f"{len(summary.failures)} failed."
+        )
+        if summary.failures:
+            messagebox.showwarning(
+                "Watch Folders",
+                "\n".join(f"{folder.display_name}: {error}" for folder, error in summary.failures),
+                parent=self.root,
+            )
 
     def _choose_target(self) -> None:
         selected = filedialog.askdirectory(parent=self.root, title="Choose backup target")

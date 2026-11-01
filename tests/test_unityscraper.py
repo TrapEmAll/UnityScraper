@@ -115,7 +115,7 @@ class TestPlatformSupport(unittest.TestCase):
             }), encoding="utf-8")
             translator = init_translator("nl", root)
             self.assertEqual(translator.get("nav_library"), "BIBLIOTHEEK")
-            self.assertEqual(translator.get("nav_settings"), "SETTINGS")
+            self.assertEqual(translator.get("nav_settings"), "Settings")
         finally:
             shutil.rmtree(root)
 
@@ -1063,6 +1063,8 @@ class TestExternalTools(unittest.TestCase):
     def test_toolbar_dropdowns_belong_to_their_buttons(self, frame, menubutton, menu):
         app = UnityScraperDesktop.__new__(UnityScraperDesktop)
         app.root = MagicMock()
+        app.pages = app._build_pages()
+        app._pages_by_key = {page.key: page for page in app.pages}
         buttons = [MagicMock() for _ in range(4)]
         submenus = [MagicMock() for _ in range(4)]
         menubutton.side_effect = buttons
@@ -2265,7 +2267,7 @@ class TestUnifiedV1Foundation(unittest.TestCase):
             ).fetchall()
         self.assertEqual(
             [row[0] for row in versions],
-            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
         )
         self.assertIn("collection_snapshots", tables)
         self.assertIn("preservation_matches", tables)
@@ -2898,52 +2900,5 @@ class TestPackageLabDomains(unittest.TestCase):
         self.assertEqual(source.read_bytes(), original)
 
 
-def run_tests():
-    """Run all tests"""
-    # Create test suite
-    loader = unittest.TestLoader()
-    suite = unittest.TestSuite()
-
-    # Add all test classes
-    suite.addTests(loader.loadTestsFromTestCase(TestPlatformSupport))
-    suite.addTests(loader.loadTestsFromTestCase(TestModularFoundation))
-    suite.addTests(loader.loadTestsFromTestCase(TestConfig))
-    suite.addTests(loader.loadTestsFromTestCase(TestRateLimiter))
-    suite.addTests(loader.loadTestsFromTestCase(TestUnityScraper))
-    suite.addTests(loader.loadTestsFromTestCase(TestDatabaseManager))
-    suite.addTests(loader.loadTestsFromTestCase(TestXboxUnityTitleCatalog))
-    suite.addTests(loader.loadTestsFromTestCase(TestExternalTools))
-    suite.addTests(loader.loadTestsFromTestCase(TestConsoleModsAdapters))
-    suite.addTests(loader.loadTestsFromTestCase(TestKnowledgeApplication))
-    suite.addTests(loader.loadTestsFromTestCase(TestDownloadProgress))
-    suite.addTests(loader.loadTestsFromTestCase(TestResumableDownloader))
-    suite.addTests(loader.loadTestsFromTestCase(TestBatchDownloadManager))
-    suite.addTests(loader.loadTestsFromTestCase(TestIntegration))
-    suite.addTests(loader.loadTestsFromTestCase(TestBackupManager))
-    suite.addTests(loader.loadTestsFromTestCase(TestRestAPI))
-    suite.addTests(loader.loadTestsFromTestCase(TestProfileSaveManager))
-    suite.addTests(loader.loadTestsFromTestCase(TestRoadmapFeatures))
-    suite.addTests(loader.loadTestsFromTestCase(TestUnifiedV1Foundation))
-    suite.addTests(loader.loadTestsFromTestCase(TestCommunityRoadmap))
-    suite.addTests(loader.loadTestsFromTestCase(TestPackageLabDomains))
-    
-    # Run tests
-    runner = unittest.TextTestRunner(verbosity=2)
-    result = runner.run(suite)
-    
-    # Print summary
-    print("\n" + "="*70)
-    print("TEST SUMMARY")
-    print("="*70)
-    print(f"Tests run: {result.testsRun}")
-    print(f"Successes: {result.testsRun - len(result.failures) - len(result.errors)}")
-    print(f"Failures: {len(result.failures)}")
-    print(f"Errors: {len(result.errors)}")
-    print("="*70)
-    
-    return result.wasSuccessful()
-
-
 if __name__ == '__main__':
-    success = run_tests()
-    exit(0 if success else 1)
+    unittest.main()

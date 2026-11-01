@@ -511,28 +511,5 @@ class TestFeatureIntegration(unittest.TestCase):
             Path(temp_db.name).unlink()
 
 
-def run_integration_tests():
-    """Run all integration tests"""
-    # Create test suite
-    loader = unittest.TestLoader()
-    suite = unittest.TestSuite()
-    
-    # Add test classes
-    suite.addTests(loader.loadTestsFromTestCase(TestI18nModule))
-    suite.addTests(loader.loadTestsFromTestCase(TestUpdaterModule))
-    suite.addTests(loader.loadTestsFromTestCase(TestQueueManager))
-    suite.addTests(loader.loadTestsFromTestCase(TestSpeedMonitoring))
-    suite.addTests(loader.loadTestsFromTestCase(TestDatabaseIntegrity))
-    suite.addTests(loader.loadTestsFromTestCase(TestAPIIntegration))
-    suite.addTests(loader.loadTestsFromTestCase(TestFeatureIntegration))
-    
-    # Run tests
-    runner = unittest.TextTestRunner(verbosity=2)
-    result = runner.run(suite)
-    
-    return result.wasSuccessful()
-
-
 if __name__ == '__main__':
-    success = run_integration_tests()
-    sys.exit(0 if success else 1)
+    unittest.main()

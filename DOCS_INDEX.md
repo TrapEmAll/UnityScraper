@@ -49,8 +49,7 @@
 python -m pip install -r requirements.txt -r requirements-dev.txt
 python -m ruff check .
 python -m compileall -q .
-python -m tests.test_unityscraper
-python -m tests.test_integration
+python -m unittest discover -s tests -t .
 ```
 
 Windows packaging:

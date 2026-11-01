@@ -43,10 +43,7 @@ jobs:
         run: python scripts/check_version.py
 
       - name: Run tests
-        run: python -m tests.test_unityscraper
-
-      - name: Run legacy integration tests
-        run: python -m tests.test_integration
+        run: python -m unittest discover -s tests -t .
 
       - name: Validate Linux shell scripts
         if: runner.os == 'Linux'

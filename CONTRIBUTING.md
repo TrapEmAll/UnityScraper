@@ -44,8 +44,7 @@ Run validation:
 ```powershell
 .\.venv\Scripts\python.exe -m ruff check .
 .\.venv\Scripts\python.exe -m compileall -q .
-.\.venv\Scripts\python.exe -m tests.test_unityscraper
-.\.venv\Scripts\python.exe -m tests.test_integration
+.\.venv\Scripts\python.exe -m unittest discover -s tests -t .
 ```
 
 Replace `.\.venv\Scripts\python.exe` with `.venv/bin/python` on Linux. Validate

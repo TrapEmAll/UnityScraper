@@ -7,6 +7,24 @@ Notable changes to UnityScraper are documented here. The project follows
 
 ### Added
 
+- Redesigned desktop interface: grouped sidebar with active-page indicator,
+  breadcrumb top bar, card layouts, window-wide status bar, DPI-correct scaling,
+  and remembered window size, position, and last page.
+- Dark, light, and high-contrast themes with five accent colors, switchable live.
+- Home dashboard with library metrics, items needing attention, recent activity
+  across scans, backups, syncs, and checks, plus quick actions.
+- Command palette (Ctrl+P) with fuzzy search over pages, actions, and games.
+- Library cover grid view with a thumbnail cache, sortable columns, filter chips,
+  play-status and tag filters, and bulk actions with CSV export of a selection.
+- Favorites, play status, 1–5 ratings, tags, and notes for every game.
+- Notification center with toasts and a persistent history.
+- Automatic database backups with retention and in-app restore (Settings).
+- Watch folders in Backup Manager that rescan on a schedule and report new content.
+- Title update watchlist (Downloads) with scheduled XboxUnity checks.
+- Additive schema migration 12 for personal game data, notifications, watch
+  folders, and the title update watchlist.
+- Keyboard shortcut sheet (F1) and Ctrl+, for Settings.
+
 - A catalog-backed Tool Center with persistent executable discovery, SHA-256
   identification, platform-aware availability, command previews, and CLI parity.
 - Native extract-xiso list, extract, create, and guarded rewrite workflows,
@@ -123,6 +141,9 @@ Notable changes to UnityScraper are documented here. The project follows
 
 ### Fixed
 
+- Database backups left their files locked on Windows, which broke follow-up
+  file operations.
+- Interface scale 1.0 shrank all text below the system's native size.
 - ConsoleMods and XenonLibrary Cloudflare responses now produce actionable
   browser-verification diagnostics instead of opaque HTTP failures.
 - Wiki refreshes retain known seed and cache URLs, preserve the original fetch
@@ -133,6 +154,10 @@ Notable changes to UnityScraper are documented here. The project follows
 
 ### Changed
 
+- Archive health scans no longer block the window.
+- Database backup and restore moved from Help & About to Settings.
+- Tests run with `python -m unittest discover -s tests -t .`; the hand-maintained
+  suite lists, which skipped four tests, were removed.
 - Version advanced to `1.2.0-beta.1`.
 - CI now runs the Python suite on Windows, Linux, and macOS.
 - Cached XboxUnity titles now resolve immediately in library lists and details,

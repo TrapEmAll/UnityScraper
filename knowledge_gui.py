@@ -14,10 +14,6 @@ from offline_knowledge import OfflineKnowledgeArchive
 from platform_support import open_path
 from ui_theme import PALETTE
 
-TEXT = PALETTE.text
-ACCENT = PALETTE.accent
-BORDER = PALETTE.border
-
 
 class KnowledgePage:
     """Search, source-management, import, and conflict views."""
@@ -133,13 +129,13 @@ class KnowledgePage:
             details,
             wrap=tk.WORD,
             background=PALETTE.field,
-            foreground=TEXT,
-            insertbackground=ACCENT,
+            foreground=PALETTE.text,
+            insertbackground=PALETTE.accent,
             selectbackground=PALETTE.selection,
-            selectforeground=TEXT,
+            selectforeground=PALETTE.selection_text,
             relief=tk.FLAT,
             highlightthickness=1,
-            highlightbackground=BORDER,
+            highlightbackground=PALETTE.border,
             padx=12,
             pady=10,
         )

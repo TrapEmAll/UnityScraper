@@ -25,11 +25,10 @@ root must be the working directory):
 python -m ruff check .
 python -m compileall -q .
 python scripts/check_version.py
-python -m tests.test_unityscraper
-python -m tests.test_integration
+python -m unittest discover -s tests -t .
 ```
 
-`make check` runs all five. CI runs the same steps on Windows, Linux and macOS
+`make check` runs all four. CI runs the same steps on Windows, Linux and macOS
 with Python 3.10 and 3.12. Run `sh -n` on any shell script you change.
 
 ## Layout
@@ -41,8 +40,8 @@ with Python 3.10 and 3.12. Run `sh -n` on any shell script you change.
   package, collection, sync, tool and plugin modules. New code goes here.
 - Top-level `*_service.py`, `*_manager.py` and `*_gui.py` modules are the legacy
   layer being moved into the package; keep their public names working.
-- `tests/`: unittest suites. Each suite lists its test classes in `run_tests()`;
-  add new classes there.
+- `tests/`: unittest suites, all found by discovery. Put new tests in a
+  `tests/test_<area>.py` file.
 
 ## Rules
 

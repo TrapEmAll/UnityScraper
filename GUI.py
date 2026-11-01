@@ -27,7 +27,8 @@ try:
     from main import UnityScraper, Config
     from i18n import init_translator, get_translator, t
     from updater import VersionChecker
-    from ui_theme import apply_vs2010_theme
+    from ui_theme import PALETTE, apply_theme
+    from unityscraper.core.config import read_config
     from queue_manager import DownloadQueue
 except ImportError as e:
     print(f"Error: Missing required module: {e}")
@@ -89,8 +90,17 @@ class UnityScraperGUI:
             logging.warning(f"Unable to load window icon from {icon_path}: {e}")
     
     def setup_styles(self):
-        """Configure ttk styles"""
-        apply_vs2010_theme(self.root)
+        """Configure ttk styles; inside the desktop app, keep its active theme."""
+        if isinstance(self.root, tk.Toplevel):
+            # ttk styles are global, so re-applying would reset the host's theme choice.
+            self.root.configure(background=PALETTE.window)
+        else:
+            config = read_config()
+            apply_theme(
+                self.root,
+                theme=str(config.get("theme", "dark")),
+                accent=str(config.get("accent", "green")),
+            )
     
     def create_widgets(self):
         """Create all GUI widgets"""
