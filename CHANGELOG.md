@@ -5,6 +5,8 @@ Notable changes to UnityScraper are documented here. The project follows
 
 ## [Unreleased]
 
+## [1.3.0-beta.1] - 2026-11-01
+
 ### Added
 
 - Redesigned desktop interface: grouped sidebar with active-page indicator,
@@ -158,7 +160,7 @@ Notable changes to UnityScraper are documented here. The project follows
 - Database backup and restore moved from Help & About to Settings.
 - Tests run with `python -m unittest discover -s tests -t .`; the hand-maintained
   suite lists, which skipped four tests, were removed.
-- Version advanced to `1.2.0-beta.1`.
+- Version advanced to `1.3.0-beta.1`.
 - CI now runs the Python suite on Windows, Linux, and macOS.
 - Cached XboxUnity titles now resolve immediately in library lists and details,
   enrich matching rows page by page, and recover after interrupted refreshes.
