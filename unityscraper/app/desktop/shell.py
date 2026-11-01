@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import tkinter as tk
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from tkinter import ttk
 from typing import Callable, Sequence
 
@@ -52,7 +52,7 @@ class Sidebar(ttk.Frame):
         self._rows: dict[str, tuple[tk.Frame, ttk.Button, tk.Label | None]] = {}
 
         brand = ttk.Frame(self, style="Sidebar.TFrame")
-        brand.pack(fill=tk.X, padx=4, pady=(0, 18))
+        brand.pack(fill=tk.X, padx=4, pady=(0, 10))
         if brand_image is not None:
             ttk.Label(brand, image=brand_image, style="Brand.TLabel").pack(side=tk.LEFT, padx=(0, 9))
         text = ttk.Frame(brand, style="Sidebar.TFrame")
@@ -60,15 +60,29 @@ class Sidebar(ttk.Frame):
         ttk.Label(text, text="UnityScraper", style="Brand.TLabel").pack(anchor=tk.W)
         ttk.Label(text, text=version, style="AccentBrand.TLabel").pack(anchor=tk.W)
 
+        # The nav list scrolls with the wheel when the window is too short to show it all.
+        self._canvas = tk.Canvas(self, background=PALETTE.chrome, highlightthickness=0, borderwidth=0)
+        self._canvas.pack(fill=tk.BOTH, expand=True)
+        nav = ttk.Frame(self._canvas, style="Sidebar.TFrame")
+        window = self._canvas.create_window(0, 0, window=nav, anchor=tk.NW)
+        nav.bind("<Configure>", lambda _event: self._canvas.configure(
+            scrollregion=self._canvas.bbox("all"), width=nav.winfo_reqwidth()
+        ))
+        self._canvas.bind(
+            "<Configure>", lambda event: self._canvas.itemconfigure(window, width=event.width)
+        )
+        self.bind("<Enter>", lambda _event: self._bind_wheel(True))
+        self.bind("<Leave>", self._leave)
+
         group = None
         for page in pages:
             if page.group != group:
                 group = page.group
-                ttk.Label(self, text=group.upper(), style="NavSection.TLabel").pack(
-                    anchor=tk.W, padx=8, pady=(12, 3)
+                ttk.Label(nav, text=group.upper(), style="NavSection.TLabel").pack(
+                    anchor=tk.W, padx=8, pady=(10, 2)
                 )
-            row = tk.Frame(self, background=PALETTE.chrome)
-            row.pack(fill=tk.X, pady=1)
+            row = tk.Frame(nav, background=PALETTE.chrome)
+            row.pack(fill=tk.X)
             indicator = tk.Frame(row, width=3, background=PALETTE.chrome)
             indicator.pack(side=tk.LEFT, fill=tk.Y)
             hint = None
@@ -84,6 +98,25 @@ class Sidebar(ttk.Frame):
             )
             button.pack(side=tk.LEFT, fill=tk.X, expand=True)
             self._rows[page.key] = (indicator, button, hint)
+
+    def _leave(self, event: tk.Event) -> None:
+        # Moving onto a child button also fires <Leave>; keep the wheel bound until truly outside.
+        under = self.winfo_containing(event.x_root, event.y_root)
+        if under is None or not str(under).startswith(str(self)):
+            self._bind_wheel(False)
+
+    def _bind_wheel(self, active: bool) -> None:
+        for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            if active:
+                self.bind_all(sequence, self._scroll)
+            else:
+                self.unbind_all(sequence)
+
+    def _scroll(self, event: tk.Event) -> None:
+        if self._canvas.winfo_height() >= self._canvas.bbox("all")[3]:
+            return
+        step = -1 if event.num == 4 or event.delta > 0 else 1
+        self._canvas.yview_scroll(step * 2, "units")
 
     def set_active(self, key: str) -> None:
         for page_key, (indicator, button, hint) in self._rows.items():
@@ -178,16 +211,33 @@ class ToastManager:
             bottom -= 8
 
 
-def _relative_time(created_at: str) -> str:
+def relative_time(timestamp: str, now: datetime | None = None) -> str:
+    """Format an ISO or SQLite timestamp as '5m ago'; naive values are treated as UTC."""
     try:
-        created = datetime.fromisoformat(created_at)
+        moment = datetime.fromisoformat(str(timestamp).strip())
     except ValueError:
         return ""
-    seconds = int((datetime.now(created.tzinfo) - created).total_seconds())
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    seconds = int(((now or datetime.now(timezone.utc)) - moment).total_seconds())
+    if seconds < 0:
+        return "just now"
     for size, unit in ((86400, "d"), (3600, "h"), (60, "m")):
         if seconds >= size:
             return f"{seconds // size}{unit} ago"
     return "just now"
+
+
+def format_size(size: object) -> str:
+    """Format a byte count as '1.5 MB'; empty or zero shows an em dash."""
+    if not size:
+        return "—"
+    value = float(size)  # type: ignore[arg-type]
+    for suffix in ("B", "KB", "MB", "GB"):
+        if value < 1024 or suffix == "GB":
+            return f"{value:.1f} {suffix}"
+        value /= 1024
+    return "—"
 
 
 class NotificationPanel(tk.Toplevel):
@@ -256,7 +306,7 @@ class NotificationPanel(tk.Toplevel):
                 font=font("base", "normal" if item.read else "bold"),
             ).pack(side=tk.LEFT)
             tk.Label(
-                title_row, text=_relative_time(item.created_at), background=PALETTE.panel_alt,
+                title_row, text=relative_time(item.created_at), background=PALETTE.panel_alt,
                 foreground=PALETTE.muted, font=font("small"),
             ).pack(side=tk.RIGHT)
             if item.message:

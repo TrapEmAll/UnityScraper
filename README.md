@@ -26,6 +26,10 @@ archives before running large imports or transfers.
 - Tracks pending, downloaded, failed, and verified content.
 - Supports retries, rate limiting, bandwidth limits, and resumable downloads.
 - Verifies local archive records and exports JSON or CSV reports.
+- Browses the library as a sortable list or a cover grid, with filter chips,
+  play-status and tag filters, and bulk actions with CSV export of a selection.
+- Keeps personal favorites, play status, 1–5 ratings, tags, and notes per game.
+- Watches selected games for new XboxUnity title updates on a schedule.
 
 XboxUnity endpoints are intentionally **HTTP-only** because that is what the
 service exposes. UnityScraper does not silently substitute HTTPS URLs.
@@ -139,15 +143,21 @@ checksums, platform notes, and safety guidance.
   metadata, creates preservation reports and correction packages, and records
   local hardware notes.
 
-### Desktop Style
-
-The desktop uses a Visual Studio 2010-inspired dark tool aesthetic: compact
-square controls, charcoal chrome, blue selection and focus states, classic menu
-commands, dense tables, and status bars. The primary and Advanced Tools windows
-share the same theme, with high-contrast and large-text alternatives retained.
-
 See [COMMUNITY_HUB.md](COMMUNITY_HUB.md) for all twenty capabilities and their
 safety boundaries.
+
+### Desktop Experience
+
+- Dark, light, and high-contrast themes with five accent colors, switchable live
+  from the top bar or Settings; the Advanced Tools window shares the theme.
+- A Home dashboard with library metrics, items needing attention, recent
+  activity, and quick actions.
+- A command palette (Ctrl+P) that fuzzy-searches pages, actions, and games.
+- Toast notifications for background work, with a persistent history under
+  Notifications.
+- Automatic database backups with retention and in-app restore in Settings.
+- Watch folders in Backup Manager that rescan on a schedule and report new content.
+- Remembered window size, position, and last page; F1 lists keyboard shortcuts.
 
 ## Install
 
@@ -218,18 +228,19 @@ Linux source setup:
 
 | Workspace | Purpose |
 | --- | --- |
-| Library | Browse games, covers, MediaIDs, and available updates |
+| Home | Library metrics, items needing attention, recent activity, and quick actions |
+| Library | Browse games as a list or cover grid; filter, sort, rate, tag, annotate, and watch for updates |
 | Add Games | Search cached game names, select TitleIDs, or import lists |
-| Downloads | Review and manage download activity |
-| Backup Manager | Scan, install, verify, export, convert, and transfer owned content |
+| Downloads | Title update watchlist with scheduled checks, plus the download tools |
+| Backup Manager | Scan, install, verify, export, convert, transfer, and watch folders for new content |
 | Profiles & Saves | Inventory profiles, inspect achievements, compare, snapshot, restore, and migrate to Xenia |
 | Tool Center | Run and manage supported Xbox 360 community utilities |
 | Collections | Identify storage, compare Title Updates, verify preservation data, and preview repairs |
 | Knowledge | Search sources, facts, citations, imports, and conflicts |
 | Community Hub | Unified search, console plans, profiles, preservation, plugins, recovery, compatibility, and release toolkit |
 | Archive Health | Find missing or inconsistent downloaded files |
-| Settings | Configure storage and scraper behavior |
-| Help & About | Version, diagnostics, storage, and advanced tools |
+| Settings | Appearance, accessibility, storage, network, and database backups |
+| Help & About | Version, diagnostics, storage, credits, and links |
 
 ## Storage and Portable Mode
 
@@ -424,8 +435,7 @@ Run the same high-signal checks used in CI:
 ```powershell
 .\.venv\Scripts\python.exe -m ruff check .
 .\.venv\Scripts\python.exe -m compileall -q .
-.\.venv\Scripts\python.exe -m tests.test_unityscraper
-.\.venv\Scripts\python.exe -m tests.test_integration
+.\.venv\Scripts\python.exe -m unittest discover -s tests -t .
 ```
 
 Build the Windows executable:

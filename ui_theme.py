@@ -181,7 +181,7 @@ def apply_theme(
         ("Card.TFrame", p.panel_alt), ("Header.TFrame", p.panel),
     ):
         style.configure(name, background=background)
-    style.configure("Card.TFrame", bordercolor=p.border, relief="solid", borderwidth=1)
+    style.configure("Card.TFrame", borderwidth=0, relief="flat")
     style.configure("TSeparator", background=p.border)
 
     # Text
@@ -216,14 +216,16 @@ def apply_theme(
     style.configure("Badge.TLabel", padding=(6, 1))
 
     # Buttons
+    button_border = mix(p.border, p.muted, 0.7)
+    button_hot = mix(p.hover, p.text, 0.88)
     style.configure(
-        "TButton", background=p.panel_alt, foreground=p.text, bordercolor=p.border,
-        lightcolor=p.panel_alt, darkcolor=p.panel_alt, padding=(12, 6), relief="flat",
+        "TButton", background=p.hover, foreground=p.text, bordercolor=button_border,
+        lightcolor=p.hover, darkcolor=p.hover, padding=(12, 6), relief="flat",
         focusthickness=1, focuscolor=p.accent,
     )
     style.map(
         "TButton",
-        background=[("disabled", p.panel), ("pressed", p.selection), ("active", p.hover)],
+        background=[("disabled", p.panel_alt), ("pressed", p.selection), ("active", button_hot)],
         bordercolor=[("focus", p.accent), ("active", p.muted)],
         foreground=[("disabled", p.disabled)],
     )
@@ -240,10 +242,10 @@ def apply_theme(
         "Danger.TButton", background=p.panel_alt, foreground=p.danger, bordercolor=p.danger,
     )
     style.map("Danger.TButton", background=[("active", p.hover)])
-    for name in ("Ghost.TButton", "Tool.TButton"):
+    for name, surface in (("Ghost.TButton", p.panel_alt), ("Tool.TButton", p.panel)):
         style.configure(
-            name, background=p.panel, foreground=p.text, bordercolor=p.panel,
-            lightcolor=p.panel, darkcolor=p.panel, padding=(8, 4),
+            name, background=surface, foreground=p.text, bordercolor=surface,
+            lightcolor=surface, darkcolor=surface, padding=(8, 4),
         )
         style.map(
             name,
@@ -265,7 +267,7 @@ def apply_theme(
         style.configure(
             name, anchor=tk.W, background=background, foreground=foreground,
             bordercolor=background, lightcolor=background, darkcolor=background,
-            padding=(10, 7), relief="flat", font=base,
+            padding=(10, 4), relief="flat", font=base,
         )
         style.map(
             name,

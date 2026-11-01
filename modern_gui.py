@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import queue
 import re
-import sqlite3
 import threading
 import tkinter as tk
 import webbrowser
@@ -20,9 +19,6 @@ from typing import Any, Callable, TypeVar
 from app_paths import (
     BASE_DIR,
     CONFIG_PATH,
-    DATABASE_PATH,
-    DOWNLOADS_DIR,
-    EXPORTS_DIR,
     GUI_LOG_PATH,
     LANGUAGE_PACKS_DIR,
     TITLEIDS_PATH,
@@ -40,14 +36,13 @@ from community_gui import CommunityHubPage
 from community_services import AccessibilityService
 from backup_service import BackupService
 from database import DatabaseManager
-from database_migrations import create_database_backup, restore_database_backup
 from diagnostics import create_diagnostics_bundle
 from external_tools_gui import ExternalToolsPage
 from knowledge_service import KnowledgeService
 from knowledge_scheduler import KnowledgeScheduler
 from knowledge_gui import KnowledgePage
-from i18n import SUPPORTED_LANGUAGES, init_translator, t
-from unityscraper.domains.library import GameSummary, LibraryService
+from i18n import init_translator, t
+from unityscraper.domains.library import LibraryService
 from platform_support import open_path
 from profile_gui import ProfileSavePage
 from package_gui import PackageLabPage
@@ -62,6 +57,7 @@ from ui_theme import (
     apply_theme,
     text_options,
 )
+from unityscraper.app.desktop.command_palette import CommandPalette, PaletteEntry
 from unityscraper.app.desktop.shell import (
     NotificationPanel,
     PageSpec,
@@ -71,7 +67,17 @@ from unityscraper.app.desktop.shell import (
     ToastManager,
 )
 from unityscraper.core.config import read_config, update_config
+from unityscraper.app.desktop.downloads_page import DownloadsPage, notify_check_results
+from unityscraper.app.desktop.home_page import HomePage
+from unityscraper.app.desktop.library_page import LibraryPage
+from unityscraper.app.desktop.settings_page import SettingsPage
+from unityscraper.core.db_backups import AutoBackupService
 from unityscraper.core.notifications import NotificationService
+from unityscraper.domains.library.update_watch import (
+    UpdateWatchService,
+    make_xboxunity_collector,
+)
+from unityscraper.domains.backups.watch_folders import WatchFolderService, WatchScanSummary
 from updater import VersionChecker
 
 
@@ -260,15 +266,15 @@ class UnityScraperDesktop:
         self.root.minsize(1040, 680)
         self._set_icon()
         self._configure_style()
-        self._build_ui(str(config.get("last_page", "library")))
+        self._build_ui(str(config.get("last_page", "home")))
         self._bind_shortcuts()
         self.root.protocol("WM_DELETE_WINDOW", self._close)
 
         if run_first_run_wizard(self.root):
-            self.refresh_library()
+            self._refresh_library_page()
             if bool(config.get("sync_title_catalog_on_start", True)):
                 self.root.after(750, self._start_catalog_sync_if_stale)
-            self.root.after(1500, self._start_scheduled_knowledge_refresh)
+            self.root.after(1500, self._start_scheduled_tasks)
         else:
             self.root.after(0, self.root.destroy)
 
@@ -325,6 +331,8 @@ class UnityScraperDesktop:
 
     def _build_pages(self) -> list[PageSpec]:
         entries: tuple[tuple[str, str, str, str, str], ...] = (
+            ("home", t("nav_home"), "Overview", "⌂",
+             "Recent activity, items needing attention, and shortcuts"),
             ("library", t("nav_library"), "Library", "▦",
              "Browse games, cover art, MediaIDs, and title updates"),
             ("add_games", t("nav_add_games"), "Library", "+",
@@ -402,7 +410,7 @@ class UnityScraperDesktop:
         self.content.rowconfigure(1, weight=1)
 
         self.toasts = ToastManager(self.root)
-        self.navigate(page_key if page_key in self._pages_by_key else "library")
+        self.navigate(page_key if page_key in self._pages_by_key else "home")
 
     def _build_topbar(self, parent: ttk.Frame) -> None:
         bar = ttk.Frame(parent, padding=(26, 14, 26, 0), style="Content.TFrame")
@@ -421,6 +429,12 @@ class UnityScraperDesktop:
             style="Header.TButton",
             command=self._toggle_theme,
         ).pack(side=tk.RIGHT, padx=(0, 6))
+        ttk.Button(
+            bar,
+            text="⌕   Search or run a command…      Ctrl+P",
+            style="Header.TButton",
+            command=self.open_command_palette,
+        ).pack(side=tk.RIGHT, padx=(0, 18))
         self._refresh_notification_badge()
 
     def _build_menubar(self) -> None:
@@ -440,7 +454,7 @@ class UnityScraperDesktop:
             ("View", tuple(
                 (spec.label, spec.show)
                 for spec in self.pages
-                if spec.group in {"Library", "Knowledge"}
+                if spec.group in {"Overview", "Library", "Knowledge"}
             ) + (
                 (None, None),
                 ("Toggle Light/Dark Theme", self._toggle_theme),
@@ -505,11 +519,13 @@ class UnityScraperDesktop:
         self.root.bind("<Control-comma>", lambda _event: self.navigate("settings"))
         self.root.bind("<F5>", lambda _event: self.navigate(self.current_page))
         self.root.bind("<F1>", lambda _event: self._show_shortcuts())
+        self.root.bind("<Control-p>", lambda _event: self.open_command_palette())
 
     def _shortcut_list(self) -> list[tuple[str, str]]:
         shortcuts = [(page.shortcut, page.label) for page in self.pages if page.shortcut]
         return shortcuts + [
             ("Ctrl+L", "Library"),
+            ("Ctrl+P", "Command palette: pages, actions, and games"),
             ("Ctrl+K", "Search everything (Community Hub)"),
             ("Ctrl+,", "Settings"),
             ("F5", "Reload the current page"),
@@ -519,9 +535,57 @@ class UnityScraperDesktop:
     def _show_shortcuts(self) -> None:
         ShortcutSheet(self.root, self._shortcut_list())
 
+    def open_command_palette(self) -> None:
+        CommandPalette(self.root, self._palette_entries)
+
+    def _palette_entries(self) -> list[PaletteEntry]:
+        entries = [
+            PaletteEntry(
+                page.label, "Page", page.show,
+                subtitle=page.description, keywords=page.group, shortcut=page.shortcut or "",
+            )
+            for page in self.pages
+        ]
+        config = read_config()
+        theme = str(config.get("theme", DEFAULT_THEME))
+        accent = str(config.get("accent", DEFAULT_ACCENT))
+        actions: tuple[tuple[str, Callable[[], None], str, str], ...] = (
+            ("Switch to light theme" if theme == "dark" else "Switch to dark theme",
+             self._toggle_theme, "Appearance", ""),
+            ("Use high-contrast theme", lambda: self.set_theme("high_contrast", accent),
+             "Appearance accessibility", ""),
+            ("Show keyboard shortcuts", self._show_shortcuts, "Help keys", "F1"),
+            ("Show notifications", self._open_notifications, "Alerts history", ""),
+            ("Refresh XboxUnity title catalog", self._start_catalog_sync, "Sync titles", ""),
+            ("Check watched title updates", lambda: self.navigate("downloads"),
+             "Watchlist downloads", ""),
+            ("Open Advanced Tools", self._open_legacy_gui, "Collect metadata scraper", ""),
+            ("Open GUI log", self._open_log, "Diagnostics", ""),
+            ("Export diagnostics ZIP", self._export_diagnostics, "Support bundle", ""),
+            ("Check for app updates", self._check_updates, "Release version", ""),
+            ("Open application data folder", lambda: _open_path(BASE_DIR), "Storage", ""),
+        )
+        entries += [
+            PaletteEntry(title, "Action", action, keywords=keywords, shortcut=shortcut)
+            for title, action, keywords, shortcut in actions
+        ]
+        entries += [
+            PaletteEntry(
+                game.name, "Game", lambda titleid=game.titleid: self.open_game(titleid),
+                subtitle=game.titleid, keywords=game.publisher or "",
+            )
+            for game in self.library.list_games()
+        ]
+        return entries
+
+    def open_game(self, titleid: str) -> None:
+        """Show one game selected in the library."""
+        self.current_game = titleid
+        self.navigate("library")
+
     def navigate(self, page_key: str) -> None:
         """Show a registered page and mark it active in the sidebar."""
-        page = self._pages_by_key.get(page_key) or self._pages_by_key["library"]
+        page = self._pages_by_key.get(page_key) or self._pages_by_key["home"]
         self.current_page = page.key
         self.sidebar.set_active(page.key)
         self.breadcrumb_var.set(f"{page.group}  /  {page.label}")
@@ -669,6 +733,10 @@ class UnityScraperDesktop:
 
     # ------------------------------------------------------------- pages
 
+    def show_home(self) -> None:
+        self._clear_content()
+        self.home_page = HomePage(self)
+
     def show_backups(self) -> None:
         self._clear_content()
         self.backup_page = BackupPage(
@@ -676,6 +744,7 @@ class UnityScraperDesktop:
             self.content,
             self.backups,
             self._page_header,
+            notify=self.notify,
         )
 
     def show_external_tools(self) -> None:
@@ -716,240 +785,12 @@ class UnityScraperDesktop:
 
     def show_library(self) -> None:
         self._clear_content()
-        self._page_header(
-            "Game Library",
-            "Browse known games, cover art, MediaIDs, and available title updates.",
-        )
+        self.library_page = LibraryPage(self)
 
-        body = ttk.Frame(self.content)
-        body.grid(row=1, column=0, sticky="nsew")
-        body.columnconfigure(0, weight=2)
-        body.columnconfigure(1, weight=3)
-        body.rowconfigure(2, weight=1)
-
-        counts = self.library.get_dashboard_counts()
-        metrics = ttk.Frame(body)
-        metrics.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 12))
-
-        metric_data = (
-            ("Games", counts["games"]),
-            ("Updates", counts["updates_available"]),
-            ("Downloaded", counts["updates_downloaded"]),
-            ("Failed", counts["failed"]),
-        )
-        for index, (label, value) in enumerate(metric_data):
-            card = ttk.LabelFrame(metrics, text=label, padding=10)
-            card.grid(row=0, column=index, sticky="ew", padx=(0, 8))
-            metrics.columnconfigure(index, weight=1)
-            ttk.Label(card, text=str(value), style="Metric.TLabel").pack(anchor=tk.W)
-
-        search_row = ttk.Frame(body)
-        search_row.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 8))
-        search_row.columnconfigure(0, weight=1)
-
-        self.search_var = tk.StringVar()
-        search_entry = ttk.Entry(search_row, textvariable=self.search_var)
-        search_entry.grid(row=0, column=0, sticky="ew")
-        search_entry.bind("<Return>", lambda _event: self.refresh_library())
-        ttk.Button(
-            search_row,
-            text="Search",
-            command=self.refresh_library,
-            style="Accent.TButton",
-        ).grid(row=0, column=1, padx=(8, 0))
-        ttk.Button(
-            search_row,
-            text="Refresh",
-            command=self.refresh_library,
-        ).grid(row=0, column=2, padx=(8, 0))
-
-        list_frame = ttk.LabelFrame(body, text="Games", padding=8)
-        list_frame.grid(row=2, column=0, sticky="nsew", padx=(0, 8))
-        list_frame.columnconfigure(0, weight=1)
-        list_frame.rowconfigure(0, weight=1)
-
-        self.game_tree = ttk.Treeview(
-            list_frame,
-            columns=("titleid", "updates", "status"),
-            show="tree headings",
-            selectmode="browse",
-        )
-        self.game_tree.heading("#0", text="Game")
-        self.game_tree.heading("titleid", text="TitleID")
-        self.game_tree.heading("updates", text="Updates")
-        self.game_tree.heading("status", text="Status")
-        self.game_tree.column("#0", width=240)
-        self.game_tree.column("titleid", width=90, anchor=tk.CENTER)
-        self.game_tree.column("updates", width=75, anchor=tk.CENTER)
-        self.game_tree.column("status", width=90, anchor=tk.CENTER)
-        self.game_tree.grid(row=0, column=0, sticky="nsew")
-        self.game_tree.bind("<<TreeviewSelect>>", self._game_selected)
-
-        scrollbar = ttk.Scrollbar(
-            list_frame, orient=tk.VERTICAL, command=self.game_tree.yview
-        )
-        scrollbar.grid(row=0, column=1, sticky="ns")
-        self.game_tree.configure(yscrollcommand=scrollbar.set)
-
-        details = ttk.LabelFrame(body, text="Game Details", padding=12)
-        details.grid(row=2, column=1, sticky="nsew")
-        details.columnconfigure(0, weight=1)
-        details.rowconfigure(1, weight=1)
-
-        self.detail_title = ttk.Label(
-            details, text="Select a game", style="CardTitle.TLabel"
-        )
-        self.detail_title.grid(row=0, column=0, sticky=tk.W, pady=(0, 8))
-
-        self.detail_notebook = ttk.Notebook(details)
-        self.detail_notebook.grid(row=1, column=0, sticky="nsew")
-
-        self.updates_tree = self._detail_tree(
-            self.detail_notebook,
-            "Title Updates",
-            ("media_id", "version", "status", "size"),
-            ("MediaID", "Version", "Status", "Size"),
-        )
-        self.covers_tree = self._detail_tree(
-            self.detail_notebook,
-            "Covers",
-            ("type", "resolution", "status", "size"),
-            ("Type", "Resolution", "Status", "Size"),
-        )
-
-        detail_buttons = ttk.Frame(details)
-        detail_buttons.grid(row=2, column=0, sticky="ew", pady=(10, 0))
-        ttk.Button(
-            detail_buttons,
-            text="Open Download Folder",
-            command=lambda: _open_path(DOWNLOADS_DIR),
-        ).pack(side=tk.LEFT)
-        ttk.Button(
-            detail_buttons,
-            text="Open Advanced Tools",
-            command=self._open_legacy_gui,
-        ).pack(side=tk.RIGHT)
-
-        self.refresh_library()
-
-    def _detail_tree(
-        self,
-        notebook: ttk.Notebook,
-        tab_name: str,
-        columns: tuple[str, ...],
-        headings: tuple[str, ...],
-    ) -> ttk.Treeview:
-        frame = ttk.Frame(notebook, padding=8)
-        frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(0, weight=1)
-        notebook.add(frame, text=tab_name)
-
-        tree = ttk.Treeview(frame, columns=columns, show="headings")
-        for column, heading in zip(columns, headings):
-            tree.heading(column, text=heading)
-            tree.column(column, width=110, anchor=tk.CENTER)
-        tree.grid(row=0, column=0, sticky="nsew")
-        return tree
-
-    def refresh_library(self) -> None:
-        if not hasattr(self, "game_tree"):
-            return
-
-        selected = self.current_game
-        self.game_tree.delete(*self.game_tree.get_children())
-
-        games = self.library.list_games(self.search_var.get())
-        for game in games:
-            status = self._summary_status(game)
-            item = self.game_tree.insert(
-                "",
-                tk.END,
-                iid=game.titleid,
-                text=game.name,
-                values=(
-                    game.titleid,
-                    f"{game.updates_downloaded}/{game.updates_total}",
-                    status,
-                ),
-            )
-            if game.titleid == selected:
-                self.game_tree.selection_set(item)
-                self.game_tree.focus(item)
-
-        if not games:
-            self.detail_title.configure(
-                text="No games found. Use Add Games to import TitleIDs."
-            )
-        elif selected not in {game.titleid for game in games}:
-            first = games[0].titleid
-            self.game_tree.selection_set(first)
-            self.game_tree.focus(first)
-            self._load_game(first)
-
-    @staticmethod
-    def _summary_status(game: GameSummary) -> str:
-        if game.updates_failed:
-            return "Needs attention"
-        if game.updates_total and game.updates_downloaded == game.updates_total:
-            return "Complete"
-        if game.updates_total:
-            return "Updates available"
-        return "Metadata only"
-
-    def _game_selected(self, _event: tk.Event[Any]) -> None:
-        selection = self.game_tree.selection()
-        if selection:
-            self._load_game(selection[0])
-
-    def _load_game(self, titleid: str) -> None:
-        self.current_game = titleid
-        details = self.library.get_game_details(titleid)
-        if not details:
-            return
-
-        title = details["title"]
-        name = title.get("name")
-        if not name or str(name).strip().upper() == titleid.upper():
-            name = "Unknown game"
-        publisher = title.get("publisher") or "Unknown publisher"
-        self.detail_title.configure(text=f"{name}  •  {titleid}  •  {publisher}")
-
-        self.updates_tree.delete(*self.updates_tree.get_children())
-        for update in details["updates"]:
-            self.updates_tree.insert(
-                "",
-                tk.END,
-                values=(
-                    update.get("media_id") or "Unknown",
-                    update.get("version") or "Unknown",
-                    update.get("status") or "pending",
-                    self._format_size(update.get("file_size")),
-                ),
-            )
-
-        self.covers_tree.delete(*self.covers_tree.get_children())
-        for cover in details["covers"]:
-            self.covers_tree.insert(
-                "",
-                tk.END,
-                values=(
-                    cover.get("cover_type") or "Unknown",
-                    cover.get("resolution") or "Unknown",
-                    cover.get("status") or "pending",
-                    self._format_size(cover.get("file_size")),
-                ),
-            )
-
-    @staticmethod
-    def _format_size(size: Any) -> str:
-        if not size:
-            return "—"
-        value = float(size)
-        for suffix in ("B", "KB", "MB", "GB"):
-            if value < 1024 or suffix == "GB":
-                return f"{value:.1f} {suffix}"
-            value /= 1024
-        return "—"
+    def _refresh_library_page(self) -> None:
+        page = getattr(self, "library_page", None)
+        if page is not None and self.current_page == "library":
+            page.refresh()
 
     def show_add_games(self) -> None:
         self._clear_content()
@@ -958,64 +799,84 @@ class UnityScraperDesktop:
             "Import TitleIDs without editing JSON.txt by hand.",
         )
 
-        panel = ttk.LabelFrame(self.content, text="TitleID Import", padding=18)
-        panel.grid(row=1, column=0, sticky="new")
-        panel.columnconfigure(0, weight=1)
+        body = ttk.Frame(self.content)
+        body.grid(row=1, column=0, sticky="nsew")
+        body.columnconfigure(0, weight=1, uniform="add")
+        body.columnconfigure(1, weight=1, uniform="add")
 
+        search = ttk.Frame(body, style="Card.TFrame", padding=18)
+        search.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        search.columnconfigure(0, weight=1)
+        ttk.Label(search, text="Find a game", style="CardHeading.TLabel").grid(
+            row=0, column=0, sticky=tk.W
+        )
         ttk.Label(
-            panel,
-            text="Search the cached XboxUnity title catalog:",
-        ).grid(row=0, column=0, sticky=tk.W)
-
+            search,
+            text="Search the locally cached XboxUnity catalog by name or TitleID. "
+            "Press Enter or pick a suggestion to add it.",
+            style="CardMuted.TLabel",
+            wraplength=420,
+            justify=tk.LEFT,
+        ).grid(row=1, column=0, sticky=tk.W, pady=(4, 12))
         self.title_autocomplete = TitleAutocomplete(
-            panel,
+            search,
             self.title_catalog.search,
             self._accept_title_suggestion,
         )
-        self.title_autocomplete.grid(row=1, column=0, sticky="ew", pady=(6, 12))
-
-        catalog_row = ttk.Frame(panel)
-        catalog_row.grid(row=2, column=0, sticky="ew", pady=(0, 14))
+        self.title_autocomplete.grid(row=2, column=0, sticky="ew")
+        catalog_row = ttk.Frame(search, style="Card.TFrame")
+        catalog_row.grid(row=3, column=0, sticky="ew", pady=(14, 0))
         catalog_row.columnconfigure(0, weight=1)
         self.catalog_status_var = tk.StringVar(
             value=f"{self.title_catalog.count():,} XboxUnity titles cached locally"
         )
         ttk.Label(
-            catalog_row,
-            textvariable=self.catalog_status_var,
-            style="Muted.TLabel",
+            catalog_row, textvariable=self.catalog_status_var, style="CardMuted.TLabel"
         ).grid(row=0, column=0, sticky=tk.W)
         ttk.Button(
-            catalog_row,
-            text="Refresh Catalog",
-            command=self._start_catalog_sync,
+            catalog_row, text="Refresh catalog", command=self._start_catalog_sync
         ).grid(row=0, column=1, sticky=tk.E)
 
+        selected = ttk.Frame(body, style="Card.TFrame", padding=18)
+        selected.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        selected.columnconfigure(0, weight=1)
+        selected.rowconfigure(2, weight=1)
+        ttk.Label(selected, text="TitleIDs to add", style="CardHeading.TLabel").grid(
+            row=0, column=0, sticky=tk.W
+        )
         ttk.Label(
-            panel,
-            text="Selected TitleIDs:",
-        ).grid(row=3, column=0, sticky=tk.W)
-
-        self.add_titleids_text = tk.Text(panel, height=8, wrap=tk.WORD, padx=10, pady=8, **text_options())
-        self.add_titleids_text.grid(row=4, column=0, sticky="ew", pady=8)
-
-        actions = ttk.Frame(panel)
-        actions.grid(row=5, column=0, sticky="ew")
+            selected,
+            text="One per line, or separated by commas. Invalid entries are skipped.",
+            style="CardMuted.TLabel",
+        ).grid(row=1, column=0, sticky=tk.W, pady=(4, 10))
+        self.add_titleids_text = tk.Text(
+            selected, height=10, wrap=tk.WORD, padx=10, pady=8, **text_options()
+        )
+        self.add_titleids_text.grid(row=2, column=0, sticky="nsew")
+        actions = ttk.Frame(selected, style="Card.TFrame")
+        actions.grid(row=3, column=0, sticky="ew", pady=(12, 0))
         ttk.Button(
-            actions, text="Import Text File…", command=self._import_titleid_file
+            actions, text="Import text file…", command=self._import_titleid_file
         ).pack(side=tk.LEFT)
         ttk.Button(
-            actions, text="Save TitleIDs", command=self._save_titleids
+            actions, text="Save TitleIDs", style="Accent.TButton", command=self._save_titleids
         ).pack(side=tk.RIGHT)
 
+        next_steps = ttk.Frame(body, style="Card.TFrame", padding=(18, 14))
+        next_steps.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(20, 0))
+        next_steps.columnconfigure(0, weight=1)
+        ttk.Label(next_steps, text="Next step", style="CardHeading.TLabel").grid(
+            row=0, column=0, sticky=tk.W
+        )
         ttk.Label(
-            panel,
-            text=(
-                "After saving, open Advanced Tools and choose “Collect Metadata” "
-                "to scan XboxUnity for covers and title updates."
-            ),
-            wraplength=760,
-        ).grid(row=6, column=0, sticky=tk.W, pady=(18, 0))
+            next_steps,
+            text="After saving, open Advanced Tools and choose “Collect Metadata” to fetch "
+            "covers and title updates from XboxUnity.",
+            style="CardMuted.TLabel",
+        ).grid(row=1, column=0, sticky=tk.W, pady=(4, 0))
+        ttk.Button(
+            next_steps, text="Open Advanced Tools", command=self._open_legacy_gui
+        ).grid(row=0, column=1, rowspan=2, sticky=tk.E)
 
     def _accept_title_suggestion(self, suggestion: TitleSuggestion) -> None:
         current = self.add_titleids_text.get("1.0", tk.END).strip()
@@ -1068,8 +929,7 @@ class UnityScraperDesktop:
                 self._set_catalog_status(
                     f"{value.items_upserted:,} XboxUnity titles cached locally"
                 )
-                if hasattr(self, "game_tree") and self.game_tree.winfo_exists():
-                    self.refresh_library()
+                self._refresh_library_page()
             elif event == "failed":
                 self._catalog_syncing = False
                 self._set_catalog_status(
@@ -1082,22 +942,55 @@ class UnityScraperDesktop:
         if hasattr(self, "catalog_status_var"):
             self.catalog_status_var.set(text)
 
-    def _start_scheduled_knowledge_refresh(self) -> None:
-        if not self.knowledge_scheduler.is_due():
+    def _start_scheduled_tasks(self) -> None:
+        """Run every enabled background schedule that is due, each on its own worker."""
+        if self.knowledge_scheduler.is_due():
+            self.run_background(
+                "Scheduled knowledge refresh",
+                self.knowledge_scheduler.run_if_due,
+                lambda _result: self.notify(
+                    "success", "Knowledge refreshed", source="Knowledge", toast=False
+                ),
+            )
+
+        watchlist = UpdateWatchService(self.database.db_path)
+        if watchlist.schedule().is_due():
+            self.run_background(
+                "Checking watched title updates",
+                lambda: watchlist.run_if_due(make_xboxunity_collector()),
+                lambda outcome: outcome and notify_check_results(self, outcome["result"]),
+            )
+
+        backups = AutoBackupService(self.database.db_path)
+        if backups.schedule.is_due():
+            self.run_background("Automatic database backup", backups.run_if_due)
+
+        watch_folders = WatchFolderService(self.database.db_path)
+        if watch_folders.schedule().is_due():
+            self.run_background(
+                "Scanning watch folders",
+                lambda: watch_folders.run_if_due(self.backups.title_name),
+                self._report_watch_folders,
+            )
+
+    def _report_watch_folders(self, summary: WatchScanSummary | None) -> None:
+        if summary is None:
             return
-
-        def worker() -> None:
-            try:
-                self.knowledge_scheduler.run_if_due()
-            except Exception:
-                # The scheduler records the source error for the Knowledge page.
-                return
-
-        threading.Thread(
-            target=worker,
-            name="scheduled-knowledge-refresh",
-            daemon=True,
-        ).start()
+        for result in summary.results:
+            if result.new_items:
+                self.notify(
+                    "success",
+                    f"New content in {result.folder.display_name}",
+                    f"{len(result.new_items)} new item(s) found.",
+                    source="Watch folders",
+                )
+        for folder, error in summary.failures:
+            self.notify(
+                "warning",
+                f"Couldn't scan {folder.display_name}",
+                error,
+                source="Watch folders",
+            )
 
     def _import_titleid_file(self) -> None:
         selected = filedialog.askopenfilename(
@@ -1148,48 +1041,25 @@ class UnityScraperDesktop:
         merged = list(dict.fromkeys(existing + valid))
         TITLEIDS_PATH.write_text(",".join(merged), encoding="utf-8")
 
-        message = f"Saved {len(valid)} valid TitleID(s)."
+        if valid:
+            self.add_titleids_text.delete("1.0", tk.END)
+        self.notify(
+            "success" if valid else "info",
+            f"Saved {len(valid)} TitleID(s)",
+            f"{len(merged):,} TitleIDs are now in your import list.",
+            source="Add games",
+        )
         if invalid:
-            message += "\n\nSkipped invalid entries:\n" + "\n".join(invalid[:20])
-
-        messagebox.showinfo("TitleIDs saved", message, parent=self.root)
+            self.notify(
+                "warning",
+                f"Skipped {len(invalid)} invalid entr{'y' if len(invalid) == 1 else 'ies'}",
+                ", ".join(invalid[:20]),
+                source="Add games",
+            )
 
     def show_downloads(self) -> None:
         self._clear_content()
-        self._page_header(
-            "Downloads",
-            "Use the existing download engine while the new queue view is developed.",
-        )
-
-        panel = ttk.LabelFrame(self.content, text="Download Tools", padding=18)
-        panel.grid(row=1, column=0, sticky="new")
-
-        ttk.Label(
-            panel,
-            text=(
-                "The current scraper engine, retry controls, queue, rate limiting, "
-                "and download logs remain available in Advanced Tools."
-            ),
-            wraplength=760,
-        ).pack(anchor=tk.W)
-
-        ttk.Button(
-            panel,
-            text="Open Advanced Download Tools",
-            command=self._open_legacy_gui,
-        ).pack(anchor=tk.W, pady=(16, 6))
-
-        ttk.Button(
-            panel,
-            text="Open Download Folder",
-            command=lambda: _open_path(DOWNLOADS_DIR),
-        ).pack(anchor=tk.W, pady=6)
-
-        ttk.Button(
-            panel,
-            text="Open GUI Log",
-            command=self._open_log,
-        ).pack(anchor=tk.W, pady=6)
+        self.downloads_page = DownloadsPage(self)
 
     def show_knowledge(self) -> None:
         self._clear_content()
@@ -1250,51 +1120,80 @@ class UnityScraperDesktop:
         panel = ttk.Frame(self.content)
         panel.grid(row=1, column=0, sticky="nsew")
         panel.columnconfigure(0, weight=1)
-        panel.rowconfigure(1, weight=1)
+        panel.rowconfigure(2, weight=1)
 
-        ttk.Button(
-            panel,
-            text="Run Archive Scan",
-            command=self._run_health_scan,
-        ).grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
-
-        self.health_text = tk.Text(panel, wrap=tk.WORD, padx=12, pady=10, **text_options())
-        self.health_text.grid(row=1, column=0, sticky="nsew")
-        self.health_text.insert(
-            tk.END,
-            "Select “Run Archive Scan” to verify downloaded database records.\n",
+        toolbar = ttk.Frame(panel)
+        toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 14))
+        self.health_button = ttk.Button(
+            toolbar, text="Run archive scan", style="Accent.TButton", command=self._run_health_scan
         )
+        self.health_button.pack(side=tk.LEFT)
+        ttk.Label(
+            toolbar,
+            text="Checks every downloaded file recorded in the library database.",
+            style="Muted.TLabel",
+        ).pack(side=tk.LEFT, padx=(14, 0))
+
+        self.health_metrics = ttk.Frame(panel)
+        self.health_metrics.grid(row=1, column=0, sticky="ew", pady=(0, 14))
+
+        self.health_text = tk.Text(panel, wrap=tk.WORD, padx=14, pady=12, **text_options())
+        self.health_text.grid(row=2, column=0, sticky="nsew")
+        self.health_text.insert(tk.END, "Run a scan to verify downloaded database records.\n")
         self.health_text.configure(state=tk.DISABLED)
 
     def _run_health_scan(self) -> None:
-        self.root.config(cursor="watch")
-        self.root.update_idletasks()
-        try:
-            report = self.library.scan_archive_health()
-        except OSError as exc:
-            messagebox.showerror("Scan failed", str(exc), parent=self.root)
+        self.health_button.configure(state=tk.DISABLED)
+
+        def failed(error: Exception) -> None:
+            if self.health_button.winfo_exists():
+                self.health_button.configure(state=tk.NORMAL)
+            self.notify("error", "Archive scan failed", str(error), source="Archive health")
+
+        self.run_background(
+            "Archive scan", self.library.scan_archive_health, self._show_health_report, failed
+        )
+
+    def _show_health_report(self, report: dict[str, Any]) -> None:
+        problems = len(report["missing"]) + len(report["empty"])
+        self.notify(
+            "warning" if problems else "success",
+            "Archive scan finished",
+            f"{report['checked']:,} records checked, {problems} problem(s) found.",
+            source="Archive health",
+        )
+        if not self.health_text.winfo_exists():
             return
-        finally:
-            self.root.config(cursor="")
+        self.health_button.configure(state=tk.NORMAL)
 
-        output = [
-            f"Records checked: {report['checked']}",
-            f"Healthy files: {len(report['healthy'])}",
-            f"Missing files: {len(report['missing'])}",
-            f"Empty files: {len(report['empty'])}",
-            f"Duplicate file groups: {len(report['duplicate_files'])}",
-            f"Duplicate database groups: {len(report['database_duplicates'])}",
-            "",
-        ]
+        for child in self.health_metrics.winfo_children():
+            child.destroy()
+        metrics = (
+            ("Records checked", report["checked"]),
+            ("Healthy", len(report["healthy"])),
+            ("Missing", len(report["missing"])),
+            ("Empty", len(report["empty"])),
+            ("Duplicate files", len(report["duplicate_files"])),
+            ("Duplicate records", len(report["database_duplicates"])),
+        )
+        for column, (label, value) in enumerate(metrics):
+            self.health_metrics.columnconfigure(column, weight=1, uniform="health")
+            card = ttk.Frame(self.health_metrics, style="Card.TFrame", padding=(14, 10))
+            card.grid(row=0, column=column, sticky="ew", padx=(0 if column == 0 else 10, 0))
+            ttk.Label(card, text=f"{value:,}", style="Metric.TLabel").pack(anchor=tk.W)
+            ttk.Label(card, text=label, style="CardMuted.TLabel").pack(anchor=tk.W)
 
+        output: list[str] = []
         for category in ("missing", "empty"):
             if report[category]:
-                output.append(category.upper())
+                output.append(f"{category.capitalize()} files")
                 for item in report[category]:
                     output.append(
-                        f"• {item.get('titleid')} — {item.get('file_path') or item.get('reason')}"
+                        f"  • {item.get('titleid')} — {item.get('file_path') or item.get('reason')}"
                     )
                 output.append("")
+        if not output:
+            output.append("No missing or empty files. Your archive matches the database.")
 
         self.health_text.configure(state=tk.NORMAL)
         self.health_text.delete("1.0", tk.END)
@@ -1303,106 +1202,7 @@ class UnityScraperDesktop:
 
     def show_settings(self) -> None:
         self._clear_content()
-        self._page_header(
-            "Settings",
-            "Safe defaults are shown first; network tuning remains optional.",
-        )
-
-        config = read_config()
-        panel = ttk.LabelFrame(self.content, text="Application Settings", padding=18)
-        panel.grid(row=1, column=0, sticky="new")
-        panel.columnconfigure(1, weight=1)
-
-        self.output_var = tk.StringVar(
-            value=str(config.get("output_dir", DOWNLOADS_DIR))
-        )
-        self.workers_var = tk.IntVar(value=int(config.get("workers", 4)))
-        self.rate_var = tk.DoubleVar(value=float(config.get("rate_limit", 0.35)))
-        self.timeout_var = tk.IntVar(value=int(config.get("timeout", 30)))
-        self.retries_var = tk.IntVar(value=int(config.get("max_retries", 3)))
-        self.scale_var = tk.DoubleVar(value=float(config.get("ui_scale", 1.0)))
-        self.language_var = tk.StringVar(value=str(config.get("language", "en")))
-
-        ttk.Label(panel, text="Archive folder").grid(row=0, column=0, sticky=tk.W)
-        ttk.Entry(panel, textvariable=self.output_var).grid(
-            row=0, column=1, sticky="ew", padx=8
-        )
-        ttk.Button(panel, text="Browse…", command=self._browse_output).grid(
-            row=0, column=2
-        )
-
-        ttk.Separator(panel).grid(
-            row=1, column=0, columnspan=3, sticky="ew", pady=16
-        )
-        ttk.Label(
-            panel, text="Advanced networking", style="CardTitle.TLabel"
-        ).grid(row=2, column=0, columnspan=3, sticky=tk.W)
-
-        fields = (
-            ("Interface scale", self.scale_var, 0.8, 2.0),
-            ("Parallel workers", self.workers_var, 1, 16),
-            ("Minimum request delay", self.rate_var, 0.1, 5.0),
-            ("Timeout seconds", self.timeout_var, 5, 120),
-            ("Maximum retries", self.retries_var, 0, 10),
-        )
-        for offset, (label, variable, minimum, maximum) in enumerate(fields, start=3):
-            ttk.Label(panel, text=label).grid(
-                row=offset, column=0, sticky=tk.W, pady=5
-            )
-            ttk.Spinbox(
-                panel,
-                textvariable=variable,
-                from_=minimum,
-                to=maximum,
-                width=12,
-            ).grid(row=offset, column=1, sticky=tk.W, padx=8)
-
-        ttk.Label(panel, text="Language").grid(row=8, column=0, sticky=tk.W, pady=5)
-        ttk.Combobox(
-            panel, textvariable=self.language_var, state="readonly",
-            values=tuple(SUPPORTED_LANGUAGES), width=12,
-        ).grid(row=8, column=1, sticky=tk.W, padx=8)
-
-        ttk.Button(
-            panel,
-            text="Save Settings",
-            command=self._save_settings,
-        ).grid(row=9, column=2, sticky=tk.E, pady=(16, 0))
-
-    def _browse_output(self) -> None:
-        selected = filedialog.askdirectory(
-            parent=self.root,
-            initialdir=self.output_var.get(),
-        )
-        if selected:
-            self.output_var.set(selected)
-
-    def _save_settings(self) -> None:
-        output = Path(self.output_var.get()).expanduser()
-        try:
-            output.mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            messagebox.showerror("Invalid folder", str(exc), parent=self.root)
-            return
-
-        update_config(
-            {
-                "output_dir": str(output),
-                "workers": self.workers_var.get(),
-                "rate_limit": self.rate_var.get(),
-                "timeout": self.timeout_var.get(),
-                "max_retries": self.retries_var.get(),
-                "ui_scale": self.scale_var.get(),
-                "language": self.language_var.get(),
-            }
-        )
-        self.apply_ui_scale(self.scale_var.get())
-        self.rebuild()
-        messagebox.showinfo(
-            "Settings",
-            "Settings saved. Interface scaling applies immediately; language changes apply after restart.",
-            parent=self.root,
-        )
+        self.settings_page = SettingsPage(self)
 
     def show_about(self) -> None:
         self._clear_content()
@@ -1411,107 +1211,75 @@ class UnityScraperDesktop:
             "Diagnostics, local storage, and project information.",
         )
 
-        panel = ttk.LabelFrame(self.content, text="UnityScraper", padding=18)
-        panel.grid(row=1, column=0, sticky="new")
+        body = ttk.Frame(self.content)
+        body.grid(row=1, column=0, sticky="nsew")
+        body.columnconfigure(0, weight=3, uniform="about")
+        body.columnconfigure(1, weight=2, uniform="about")
 
+        def card(column: int, row: int, title: str) -> ttk.Frame:
+            frame = ttk.Frame(body, style="Card.TFrame", padding=18)
+            frame.grid(
+                row=row, column=column, sticky="nsew",
+                padx=(0, 10) if column == 0 else (10, 0), pady=(0, 20),
+            )
+            ttk.Label(frame, text=title, style="CardHeading.TLabel").pack(anchor=tk.W, pady=(0, 8))
+            return frame
+
+        about = card(0, 0, f"UnityScraper {APP_VERSION}")
         ttk.Label(
-            panel,
-            text=f"Version {APP_VERSION}",
-            style="CardTitle.TLabel",
-        ).pack(anchor=tk.W)
-        ttk.Label(
-            panel,
-            text=f"Created and maintained by {PROJECT_CREATOR}",
-            style="CardTitle.TLabel",
-        ).pack(anchor=tk.W, pady=(6, 0))
-        ttk.Label(
-            panel,
+            about,
             text=(
-                "Xbox 360 library, knowledge, update, artwork, and "
-                "backup manager.\n"
-                "Licensed under GPL-3.0-only.\n"
-                "Bundled XeXTool 6.3 created by xorloser.\n\n"
-                "Profile/STFS design informed by Dalavin (DJ SkunkieButt)'s "
-                "X360 library and Le Fluffie.\n\n"
-                + describe_storage()
+                f"Created and maintained by {PROJECT_CREATOR}. An Xbox 360 library, knowledge, "
+                "title update, artwork, and backup manager, licensed under GPL-3.0-only.\n\n"
+                f"Bundled XeXTool 6.3 by {XEXTOOL_CREATOR}. Profile and STFS design informed by "
+                f"{LE_FLUFFIE_CREATOR}'s X360 library and Le Fluffie."
             ),
-            justify=tk.LEFT,
-        ).pack(anchor=tk.W, pady=(8, 18))
-
-        ttk.Separator(panel).pack(fill=tk.X, pady=(0, 14))
-        ttk.Label(
-            panel,
-            text=f"A message from {PROJECT_CREATOR}",
-            style="CardTitle.TLabel",
-        ).pack(anchor=tk.W)
-        message_panel = ttk.Frame(panel)
-        message_panel.pack(fill=tk.X, pady=(0, 14))
-        ttk.Label(
-            message_panel,
-            text=COMMUNITY_MESSAGE,
-            wraplength=780,
+            style="Card.TLabel",
+            wraplength=560,
             justify=tk.LEFT,
         ).pack(anchor=tk.W)
-        ttk.Label(
-            message_panel,
-            text=f"- {PROJECT_CREATOR}",
-            style="Success.TLabel",
-        ).pack(anchor=tk.W, pady=(10, 0))
 
+        storage = card(0, 1, "Local storage")
+        ttk.Label(
+            storage, text=describe_storage(), style="CardMuted.TLabel", justify=tk.LEFT
+        ).pack(anchor=tk.W)
         ttk.Button(
-            panel,
-            text="Export Diagnostics ZIP",
-            command=self._export_diagnostics,
-        ).pack(anchor=tk.W, pady=4)
-        ttk.Button(panel, text="Back Up Database", command=self._backup_database).pack(
-            anchor=tk.W, pady=4
+            storage, text="Open application data", command=lambda: _open_path(BASE_DIR)
+        ).pack(anchor=tk.W, pady=(12, 0))
+
+        message = card(0, 2, f"A message from {PROJECT_CREATOR}")
+        ttk.Label(
+            message, text=COMMUNITY_MESSAGE, style="Card.TLabel", wraplength=560, justify=tk.LEFT
+        ).pack(anchor=tk.W)
+        ttk.Label(message, text=f"— {PROJECT_CREATOR}", style="CardMuted.TLabel").pack(
+            anchor=tk.W, pady=(10, 0)
         )
-        ttk.Button(panel, text="Restore Database", command=self._restore_database).pack(
-            anchor=tk.W, pady=4
-        )
-        ttk.Button(panel, text="Check for Updates", command=self._check_updates).pack(
-            anchor=tk.W, pady=4
-        )
-        ttk.Button(
-            panel,
-            text="Open Application Data",
-            command=lambda: _open_path(BASE_DIR),
-        ).pack(anchor=tk.W, pady=4)
-        ttk.Button(
-            panel,
-            text="Open Documentation",
-            command=lambda: webbrowser.open(
-                "https://github.com/TrapEmAll/UnityScraper#readme"
-            ),
-        ).pack(anchor=tk.W, pady=4)
-        ttk.Button(
-            panel,
-            text=f"View {PROJECT_CREATOR} on GitHub",
-            command=lambda: webbrowser.open(
-                f"https://github.com/{PROJECT_CREATOR}"
-            ),
-        ).pack(anchor=tk.W, pady=4)
-        ttk.Button(
-            panel,
-            text=f"XeXTool credit: {XEXTOOL_CREATOR}",
-            command=lambda: webbrowser.open(
-                "https://github.com/XboxChef/XexToolGUI"
-            ),
-        ).pack(anchor=tk.W, pady=4)
-        ttk.Button(
-            panel,
-            text=f"Le Fluffie credit: {LE_FLUFFIE_CREATOR}",
-            command=lambda: webbrowser.open(
-                "https://github.com/mtolly/X360"
-            ),
-        ).pack(anchor=tk.W, pady=4)
-        ttk.Button(
-            panel,
-            text="Open GitHub Project",
-            command=lambda: webbrowser.open(
-                "https://github.com/TrapEmAll/UnityScraper"
-            ),
-        ).pack(anchor=tk.W, pady=4)
+
+        maintenance = card(1, 0, "Maintenance")
+        for label, command, style in (
+            ("Check for updates", self._check_updates, "Accent.TButton"),
+            ("Export diagnostics ZIP", self._export_diagnostics, "TButton"),
+            ("Database backups…", lambda: self.navigate("settings"), "TButton"),
+            ("Keyboard shortcuts", self._show_shortcuts, "TButton"),
+        ):
+            ttk.Button(maintenance, text=label, style=style, command=command).pack(
+                fill=tk.X, pady=3
+            )
+
+        links = card(1, 1, "Links")
+        for label, url in (
+            ("Documentation", "https://github.com/TrapEmAll/UnityScraper#readme"),
+            ("GitHub project", "https://github.com/TrapEmAll/UnityScraper"),
+            (f"{PROJECT_CREATOR} on GitHub", f"https://github.com/{PROJECT_CREATOR}"),
+            (f"XeXTool credit: {XEXTOOL_CREATOR}", "https://github.com/XboxChef/XexToolGUI"),
+            (f"Le Fluffie credit: {LE_FLUFFIE_CREATOR}", "https://github.com/mtolly/X360"),
+        ):
+            ttk.Button(
+                links,
+                text=f"{label}  ↗",
+                style="Ghost.TButton",
+                command=lambda target=url: webbrowser.open(target),
+            ).pack(anchor=tk.W, pady=1)
 
     def _export_diagnostics(self) -> None:
         try:
@@ -1526,50 +1294,6 @@ class UnityScraperDesktop:
             parent=self.root,
         )
         _open_path(bundle.parent)
-
-    def _backup_database(self) -> None:
-        selected = filedialog.asksaveasfilename(
-            parent=self.root,
-            title="Back up UnityScraper database",
-            defaultextension=".db",
-            filetypes=(("SQLite database", "*.db"), ("All files", "*.*")),
-        )
-        if selected:
-            try:
-                output = create_database_backup(DATABASE_PATH, selected)
-            except (OSError, sqlite3.Error) as exc:
-                messagebox.showerror("Database backup failed", str(exc), parent=self.root)
-            else:
-                messagebox.showinfo("Database backup", f"Created:\n{output}", parent=self.root)
-
-    def _restore_database(self) -> None:
-        selected = filedialog.askopenfilename(
-            parent=self.root,
-            title="Choose UnityScraper database backup",
-            filetypes=(("SQLite database", "*.db *.bak"), ("All files", "*.*")),
-        )
-        if not selected:
-            return
-        if not messagebox.askyesno(
-            "Restore database",
-            "UnityScraper will back up the current database, restore the selected "
-            "file, and then close. Continue?",
-            parent=self.root,
-        ):
-            return
-        try:
-            fallback = create_database_backup(DATABASE_PATH)
-            restore_database_backup(selected, DATABASE_PATH)
-        except (OSError, sqlite3.Error) as exc:
-            messagebox.showerror("Database restore failed", str(exc), parent=self.root)
-            return
-        messagebox.showinfo(
-            "Database restored",
-            f"Restore completed. Previous database backup:\n{fallback}\n\n"
-            "UnityScraper will now close.",
-            parent=self.root,
-        )
-        self.root.destroy()
 
     def _check_updates(self) -> None:
         checker = VersionChecker(timeout=10)

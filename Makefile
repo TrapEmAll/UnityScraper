@@ -10,8 +10,7 @@ lint:
 	$(PYTHON) -m compileall -q .
 
 test:
-	$(PYTHON) -m tests.test_unityscraper
-	$(PYTHON) -m tests.test_integration
+	$(PYTHON) -m unittest discover -s tests -t .
 
 check: lint test
 	$(PYTHON) scripts/check_version.py

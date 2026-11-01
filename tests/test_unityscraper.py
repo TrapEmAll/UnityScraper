@@ -2900,52 +2900,5 @@ class TestPackageLabDomains(unittest.TestCase):
         self.assertEqual(source.read_bytes(), original)
 
 
-def run_tests():
-    """Run all tests"""
-    # Create test suite
-    loader = unittest.TestLoader()
-    suite = unittest.TestSuite()
-
-    # Add all test classes
-    suite.addTests(loader.loadTestsFromTestCase(TestPlatformSupport))
-    suite.addTests(loader.loadTestsFromTestCase(TestModularFoundation))
-    suite.addTests(loader.loadTestsFromTestCase(TestConfig))
-    suite.addTests(loader.loadTestsFromTestCase(TestRateLimiter))
-    suite.addTests(loader.loadTestsFromTestCase(TestUnityScraper))
-    suite.addTests(loader.loadTestsFromTestCase(TestDatabaseManager))
-    suite.addTests(loader.loadTestsFromTestCase(TestXboxUnityTitleCatalog))
-    suite.addTests(loader.loadTestsFromTestCase(TestExternalTools))
-    suite.addTests(loader.loadTestsFromTestCase(TestConsoleModsAdapters))
-    suite.addTests(loader.loadTestsFromTestCase(TestKnowledgeApplication))
-    suite.addTests(loader.loadTestsFromTestCase(TestDownloadProgress))
-    suite.addTests(loader.loadTestsFromTestCase(TestResumableDownloader))
-    suite.addTests(loader.loadTestsFromTestCase(TestBatchDownloadManager))
-    suite.addTests(loader.loadTestsFromTestCase(TestIntegration))
-    suite.addTests(loader.loadTestsFromTestCase(TestBackupManager))
-    suite.addTests(loader.loadTestsFromTestCase(TestRestAPI))
-    suite.addTests(loader.loadTestsFromTestCase(TestProfileSaveManager))
-    suite.addTests(loader.loadTestsFromTestCase(TestRoadmapFeatures))
-    suite.addTests(loader.loadTestsFromTestCase(TestUnifiedV1Foundation))
-    suite.addTests(loader.loadTestsFromTestCase(TestCommunityRoadmap))
-    suite.addTests(loader.loadTestsFromTestCase(TestPackageLabDomains))
-    
-    # Run tests
-    runner = unittest.TextTestRunner(verbosity=2)
-    result = runner.run(suite)
-    
-    # Print summary
-    print("\n" + "="*70)
-    print("TEST SUMMARY")
-    print("="*70)
-    print(f"Tests run: {result.testsRun}")
-    print(f"Successes: {result.testsRun - len(result.failures) - len(result.errors)}")
-    print(f"Failures: {len(result.failures)}")
-    print(f"Errors: {len(result.errors)}")
-    print("="*70)
-    
-    return result.wasSuccessful()
-
-
 if __name__ == '__main__':
-    success = run_tests()
-    exit(0 if success else 1)
+    unittest.main()

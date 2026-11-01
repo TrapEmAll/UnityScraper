@@ -8,6 +8,6 @@ Follow AGENTS.md at the repository root for setup, layout and rules.
 - Put new code in `unityscraper/domains` (business logic) or `unityscraper/app`
   (desktop, CLI, API adapters); keep legacy top-level module names working.
 - Validate with `python -m ruff check .`, `python -m compileall -q .`,
-  `python -m tests.test_unityscraper` and `python -m tests.test_integration`
+  and `python -m unittest discover -s tests -t .`
   from the repository root.
 - Migrations are additive; unit tests never hit XboxUnity or wikis live.

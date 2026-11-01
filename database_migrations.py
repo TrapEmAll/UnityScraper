@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -25,7 +26,8 @@ def create_database_backup(db_path: str | Path, destination: str | Path | None =
     if source_path.resolve() == target.resolve():
         raise ValueError("Backup destination must differ from the active database")
     target.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(source_path) as source, sqlite3.connect(target) as output:
+    # sqlite3's context manager only commits; closing() releases the files (Windows locks them).
+    with closing(sqlite3.connect(source_path)) as source, closing(sqlite3.connect(target)) as output:
         source.backup(output)
     return target
 
@@ -36,7 +38,7 @@ def restore_database_backup(backup_path: str | Path, db_path: str | Path) -> Pat
     target = Path(db_path)
     if source.resolve() == target.resolve():
         raise ValueError("Restore source must differ from the active database")
-    with sqlite3.connect(source) as connection:
+    with closing(sqlite3.connect(source)) as connection:
         connection.execute("PRAGMA schema_version").fetchone()
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_suffix(target.suffix + ".restore")
